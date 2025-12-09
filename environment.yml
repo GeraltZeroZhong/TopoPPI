@@ -15,5 +15,9 @@ dependencies:
   - networkx            
   - pillow          
   - rtree      
-  - shapely 
+  - shapely
+  - openbabel 
+  - gemmi    
   - pip
+  - pip:
+    - pdbe-arpeggio
