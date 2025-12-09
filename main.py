@@ -26,6 +26,7 @@ def main():
     parser.add_argument("pdb_file", help="Path to input PDB/CIF file")
     parser.add_argument("-A", "--chain_a", required=True, help="Chain ID for the surface (Receptor)")
     parser.add_argument("-B", "--chain_b", required=True, help="Chain ID for the ligand")
+    parser.add_argument("--arpeggio", help="Path to Arpeggio JSON interactions file (Optional)", default=None)
     parser.add_argument("--cutoff", type=float, default=5.0, help="Interface distance cutoff (Angstroms)")
     parser.add_argument("--res", type=float, default=1.0, help="Grid resolution for surface generation (Angstroms)")
     parser.add_argument("--sigma", type=float, default=1.5, help="Gaussian smoothing sigma")
@@ -90,7 +91,18 @@ def main():
 
     # --- Step 5: Visualization ---
     logger.info("Visualizing results...")
-    viz = InterfaceVisualizer(atoms_A, coords_A, coords_B)
+    
+    # Updated signature to support Arpeggio
+    viz = InterfaceVisualizer(
+        chain_A_atoms=atoms_A, 
+        chain_A_coords=coords_A, 
+        chain_B_coords=coords_B, 
+        chain_B_atoms=atoms_B,
+        chain_a_id=args.chain_a,
+        chain_b_id=args.chain_b,
+        arpeggio_file=args.arpeggio
+    )
+    
     viz.plot_patches(valid_patches, output_file=args.output)
 
     elapsed = time.time() - start_time
