@@ -3,6 +3,8 @@ from tkinter import filedialog, messagebox, ttk, colorchooser
 import threading
 import sys
 import os
+import shutil
+import subprocess
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
@@ -19,23 +21,26 @@ class ProtSurfApp:
     def __init__(self, root):
         self.root = root
         self.root.title("ProtSurf2D - Protein Interface Mapper")
-        self.root.geometry("1200x900")
+        self.root.geometry("1200x950") 
 
         self.cached_viz = None
         self.cached_patches = None
         self._picking = False 
 
-        # Simplified Interaction Types
+        # Interaction Types for Arpeggio
         self.interaction_types_list = [
-            'Electrostatic', 
-            'Hydrogen Bond', 
-            'Pi-Sulfur', 
-            'Hydrophobic', 
-            'Others'
+            'salt_bridge',
+            'cation_pi',
+            'pi_stack',
+            'hbond',
+            'sulfur_pi',
+            'hydrophobic',
+            'halogen_bond',
+            'metal_complex'
         ]
         
         self.default_active = {
-            'Electrostatic', 'Hydrogen Bond', 'Hydrophobic'
+            'salt_bridge', 'hbond', 'hydrophobic', 'cation_pi', 'pi_stack'
         }
         self.interaction_vars = {}
 
@@ -54,10 +59,18 @@ class ProtSurfApp:
         # 1. Input
         lbl_frame = ttk.LabelFrame(self.left_frame, text="1. Input Data", padding=10)
         lbl_frame.pack(fill=tk.X, padx=5, pady=5)
-        ttk.Label(lbl_frame, text="PDB File:").pack(anchor=tk.W)
+        
+        # PDB Input
+        ttk.Label(lbl_frame, text="PDB Structure:").pack(anchor=tk.W)
         self.entry_file = ttk.Entry(lbl_frame)
         self.entry_file.pack(fill=tk.X, pady=2)
-        ttk.Button(lbl_frame, text="Browse...", command=self.browse_file).pack(anchor=tk.E)
+        ttk.Button(lbl_frame, text="Browse PDB...", command=self.browse_file).pack(anchor=tk.E)
+
+        # Arpeggio Input
+        ttk.Label(lbl_frame, text="Arpeggio JSON (Auto-generated if empty):").pack(anchor=tk.W, pady=(5,0))
+        self.entry_arpeggio = ttk.Entry(lbl_frame)
+        self.entry_arpeggio.pack(fill=tk.X, pady=2)
+        ttk.Button(lbl_frame, text="Browse JSON...", command=self.browse_arpeggio).pack(anchor=tk.E)
 
         # 2. Parameters
         param_frame = ttk.LabelFrame(self.left_frame, text="2. Analysis Parameters", padding=10)
@@ -110,8 +123,8 @@ class ProtSurfApp:
         f_frame = ttk.Frame(style_frame)
         f_frame.pack(fill=tk.X, pady=5)
         ttk.Label(f_frame, text="Font:").pack(side=tk.LEFT)
-        self.combo_font = ttk.Combobox(f_frame, values=["Arial", "Times New Roman", "Courier New"], width=10)
-        self.combo_font.current(0)
+        self.combo_font = ttk.Combobox(f_frame, values=["Arial", "Times New Roman", "Courier New", "sans-serif"], width=10)
+        self.combo_font.current(3)
         self.combo_font.pack(side=tk.LEFT, padx=2)
         self.spin_size = ttk.Spinbox(f_frame, from_=5, to=20, width=4)
         self.spin_size.set(9)
@@ -134,7 +147,7 @@ class ProtSurfApp:
         self.canvas_frame = ttk.Frame(self.right_frame)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
         self.current_canvas = None
-        lbl = ttk.Label(self.canvas_frame, text="Load a PDB and click Run to see visualization.", font=("Arial", 12))
+        lbl = ttk.Label(self.canvas_frame, text="Load a PDB then click Run.\nArpeggio will be invoked automatically if JSON is missing.", font=("Arial", 12))
         lbl.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
     def _init_status_bar(self):
@@ -145,6 +158,7 @@ class ProtSurfApp:
 
     def log(self, message):
         self.status_var.set(message)
+        print(f"[GUI Log] {message}")
         self.root.update_idletasks()
 
     def browse_file(self):
@@ -152,6 +166,14 @@ class ProtSurfApp:
         if filename:
             self.entry_file.delete(0, tk.END)
             self.entry_file.insert(0, filename)
+            # Auto-clear Arpeggio field if user picks new PDB, to force re-calculation or manual re-select
+            self.entry_arpeggio.delete(0, tk.END)
+
+    def browse_arpeggio(self):
+        filename = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
+        if filename:
+            self.entry_arpeggio.delete(0, tk.END)
+            self.entry_arpeggio.insert(0, filename)
 
     def choose_color(self):
         color = colorchooser.askcolor(color=self.residue_color, title="Select Residue Color")[1]
@@ -186,10 +208,12 @@ class ProtSurfApp:
         if not pdb_path or not os.path.exists(pdb_path):
             messagebox.showerror("Error", "Please select a valid PDB file.")
             return
+            
         params = {
             'path': pdb_path,
             'chain_a': self.entry_chain_a.get().strip(),
             'chain_b': self.entry_chain_b.get().strip(),
+            'arpeggio': self.entry_arpeggio.get().strip(),
             'cutoff': float(self.entry_cutoff.get()),
             'res': float(self.entry_res.get()),
             'sigma': float(self.entry_sigma.get())
@@ -206,23 +230,83 @@ class ProtSurfApp:
         self.log("Updating plot style...")
         self.update_plot(self.cached_viz, self.cached_patches, style)
 
+    def generate_arpeggio_interactions(self, pdb_path):
+        """
+        Attempts to run pdbe-arpeggio to generate interaction data.
+        Runs directly in the current environment.
+        """
+        self.log("Arpeggio JSON missing. Attempting to generate...")
+        
+        pdb_dir = os.path.dirname(os.path.abspath(pdb_path))
+        pdb_name = os.path.splitext(os.path.basename(pdb_path))[0]
+        
+        # Predicted output file (pdbe-arpeggio typically outputs {name}.json)
+        expected_json = os.path.join(pdb_dir, f"{pdb_name}.json")
+        
+        # If it already exists from a previous run, use it
+        if os.path.exists(expected_json):
+            self.log(f"Found existing Arpeggio output: {os.path.basename(expected_json)}")
+            return expected_json
+
+        # Command construction
+        # Assume pdbe-arpeggio is installed in the current PATH (via pip in environment.yml)
+        cmd = ["pdbe-arpeggio", pdb_path]
+        
+        success = False
+        
+        try:
+            self.log("Running: pdbe-arpeggio ...")
+            # Run without 'conda run', using current env context
+            subprocess.run(cmd, check=True, cwd=pdb_dir, capture_output=True)
+            success = True
+        except subprocess.CalledProcessError as e:
+            self.log(f"Arpeggio generation failed: {e}")
+            print(f"Subprocess Error (stderr): {e.stderr.decode()}")
+        except FileNotFoundError:
+            self.log("Error: 'pdbe-arpeggio' command not found. Did you install dependencies?")
+
+        if success and os.path.exists(expected_json):
+            self.log("Arpeggio JSON generated successfully.")
+            
+            # Update the GUI entry field for clarity (thread-safe way)
+            self.root.after(0, lambda: self.entry_arpeggio.insert(0, expected_json))
+            return expected_json
+        else:
+            self.log("Could not generate Arpeggio JSON. Falling back to geometric heuristics.")
+            return None
+
     def run_pipeline(self, params):
         try:
+            # --- Step 0: Arpeggio Handling ---
+            arpeggio_file = params.get('arpeggio')
+            
+            # If path is empty or invalid, try to generate it
+            if not arpeggio_file or not os.path.exists(arpeggio_file):
+                generated_json = self.generate_arpeggio_interactions(params['path'])
+                if generated_json:
+                    arpeggio_file = generated_json
+                else:
+                    arpeggio_file = None # Explicitly None to trigger heuristic fallback
+            
+            # --- Step 1: Loading ---
             self.log("Loading PDB structure...")
             loader = PDBLoader(params['path'])
             coords_A, atoms_A = loader.get_chain_data(params['chain_a'])
             coords_B, atoms_B = loader.get_chain_data(params['chain_b'])
 
+            # --- Step 2: Surface ---
             self.log("Generating molecular surface...")
             surf_gen = SurfaceGenerator(coords_A)
             mesh_A = surf_gen.generate_mesh(grid_resolution=params['res'], sigma=params['sigma'])
             if mesh_A is None: raise ValueError("Surface generation failed.")
 
+            # --- Step 3: Topology ---
             self.log("Extracting interface patches...")
             topo = TopologyManager(mesh_A, coords_B)
             patches = topo.get_interface_patches(distance_cutoff=params['cutoff'])
             if not patches: raise ValueError("No interface found with current cutoff.")
 
+            # --- Step 4: Parameterization ---
             self.log(f"Flattening {len(patches)} patches...")
             param = Parameterizer()
             valid_patches = []
@@ -234,13 +318,25 @@ class ProtSurfApp:
             
             if not valid_patches: raise ValueError("LSCM Parameterization failed for all patches.")
 
+            # --- Step 5: Visualization ---
             self.log("Rendering visualization...")
-            viz = InterfaceVisualizer(atoms_A, coords_A, coords_B, atoms_B)
+            
+            viz = InterfaceVisualizer(
+                chain_A_atoms=atoms_A, 
+                chain_A_coords=coords_A, 
+                chain_B_coords=coords_B, 
+                chain_B_atoms=atoms_B,
+                chain_a_id=params['chain_a'],
+                chain_b_id=params['chain_b'],
+                arpeggio_file=arpeggio_file
+            )
+            
             self.cached_viz = viz
             self.cached_patches = valid_patches
             self.root.after(0, lambda: self.finish_success())
         except Exception as e:
-            self.root.after(0, lambda: self.show_error(str(e)))
+            err_msg = str(e)
+            self.root.after(0, lambda: self.show_error(err_msg))
 
     def finish_success(self):
         style = self.get_style_config()
