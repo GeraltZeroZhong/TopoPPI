@@ -404,49 +404,67 @@ class ProtSurfApp:
 
     def generate_arpeggio_interactions(self, pdb_path):
         """
-        Attempts to run pdbe-arpeggio to generate interaction data.
-        Runs directly in the current environment.
+        尝试运行 pdbe-arpeggio。
+        自动将 PDB 转换为 CIF 格式，因为新版 pdbe-arpeggio/gemmi 强制要求 CIF。
         """
         self.log("Arpeggio JSON missing. Attempting to generate...")
         
         pdb_dir = os.path.dirname(os.path.abspath(pdb_path))
         pdb_name = os.path.splitext(os.path.basename(pdb_path))[0]
         
-        # Predicted output file (pdbe-arpeggio typically outputs {name}.json)
-        expected_json = os.path.join(pdb_dir, f"{pdb_name}.json")
+        # 预期的输出文件
+        json_name = f"{pdb_name}.json"
+        expected_json = os.path.join(pdb_dir, json_name)
         
-        # If it already exists from a previous run, use it
+        # 如果已有 JSON，直接使用
         if os.path.exists(expected_json):
-            self.log(f"Found existing Arpeggio output: {os.path.basename(expected_json)}")
+            self.log(f"Found existing Arpeggio output: {json_name}")
             return expected_json
 
-        # Command construction
-        # Assume pdbe-arpeggio is installed in the current PATH (via pip in environment.yml)
-        cmd = ["pdbe-arpeggio", pdb_path]
-        
-        success = False
+        # 准备目标文件，默认为原文件
+        target_file = pdb_path
+        cif_path = os.path.join(pdb_dir, f"{pdb_name}.cif")
+
+        # 检测是否为 PDB 文件，如果是则转换为 CIF
+        if pdb_path.lower().endswith('.pdb'):
+            self.log("Converting PDB to CIF for Arpeggio...")
+            try:
+                # 复用 PDBLoader 加载结构
+                loader = PDBLoader(pdb_path)
+                io = MMCIFIO()
+                io.set_structure(loader.structure)
+                io.save(cif_path)
+                target_file = cif_path # 将目标指向生成的 CIF
+            except Exception as e:
+                self.log(f"CIF Conversion failed: {e}")
+                return None
+
+        # 调用 pdbe-arpeggio (现在传入的是 CIF 或原本就是 CIF 的文件)
+        cmd = ["pdbe-arpeggio", target_file]
         
         try:
-            self.log("Running: pdbe-arpeggio ...")
-            # Run without 'conda run', using current env context
+            self.log(f"Running: pdbe-arpeggio on {os.path.basename(target_file)}...")
+            # 捕获输出以便调试
             subprocess.run(cmd, check=True, cwd=pdb_dir, capture_output=True)
-            success = True
+            
+            if os.path.exists(expected_json):
+                self.log("Arpeggio JSON generated successfully.")
+                # 更新 GUI 输入框
+                self.root.after(0, lambda: self.entry_arpeggio.delete(0, tk.END))
+                self.root.after(0, lambda: self.entry_arpeggio.insert(0, expected_json))
+                return expected_json
+            else:
+                self.log("Arpeggio ran but output JSON not found.")
+                return None
+                
         except subprocess.CalledProcessError as e:
             self.log(f"Arpeggio generation failed: {e}")
-            print(f"Subprocess Error (stderr): {e.stderr.decode()}")
-        except FileNotFoundError:
-            self.log("Error: 'pdbe-arpeggio' command not found. Did you install dependencies?")
-
-        if success and os.path.exists(expected_json):
-            self.log("Arpeggio JSON generated successfully.")
-            
-            # Update the GUI entry field for clarity (thread-safe way)
-            self.root.after(0, lambda: self.entry_arpeggio.insert(0, expected_json))
-            return expected_json
-        else:
-            self.log("Could not generate Arpeggio JSON. Falling back to geometric heuristics.")
+            if e.stderr:
+                print(f"Stderr: {e.stderr.decode()}")
             return None
-
+        except FileNotFoundError:
+            self.log("Error: 'pdbe-arpeggio' command not found.")
+            return None
     def run_pipeline(self, params):
         try:
             # --- Step 0: Arpeggio Handling ---
@@ -557,4 +575,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = ProtSurfApp(root)
     root.mainloop()
+
 
