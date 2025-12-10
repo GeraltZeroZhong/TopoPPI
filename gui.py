@@ -4,6 +4,7 @@ import threading
 import sys
 import os
 import shutil
+import csv
 import subprocess
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -60,14 +61,19 @@ class ProtSurfApp:
         lbl_frame = ttk.LabelFrame(self.left_frame, text="1. Input Data", padding=10)
         lbl_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # PDB Input
-        ttk.Label(lbl_frame, text="PDB Structure:").pack(anchor=tk.W)
+        # PDB Input (File or Folder)
+        ttk.Label(lbl_frame, text="Input (PDB File or Batch Folder):").pack(anchor=tk.W)
         self.entry_file = ttk.Entry(lbl_frame)
         self.entry_file.pack(fill=tk.X, pady=2)
-        ttk.Button(lbl_frame, text="Browse PDB...", command=self.browse_file).pack(anchor=tk.E)
+        
+        # Button Container
+        btn_box = ttk.Frame(lbl_frame)
+        btn_box.pack(fill=tk.X)
+        ttk.Button(btn_box, text="File...", width=8, command=self.browse_file).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_box, text="Folder...", width=8, command=self.browse_folder).pack(side=tk.RIGHT, padx=2)
 
         # Arpeggio Input
-        ttk.Label(lbl_frame, text="Arpeggio JSON (Auto-generated if empty):").pack(anchor=tk.W, pady=(5,0))
+        ttk.Label(lbl_frame, text="Arpeggio JSON (Optional):").pack(anchor=tk.W, pady=(5,0))
         self.entry_arpeggio = ttk.Entry(lbl_frame)
         self.entry_arpeggio.pack(fill=tk.X, pady=2)
         ttk.Button(lbl_frame, text="Browse JSON...", command=self.browse_arpeggio).pack(anchor=tk.E)
@@ -136,10 +142,17 @@ class ProtSurfApp:
 
         btn_frame = ttk.Frame(self.left_frame)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
-        self.btn_run = ttk.Button(btn_frame, text="Run Full Analysis", command=self.start_analysis)
+        
+        self.btn_run = ttk.Button(btn_frame, text="Run Single Analysis", command=self.start_analysis)
         self.btn_run.pack(fill=tk.X, pady=5)
+
+        # [Benchmark Button]
+        self.btn_bench = ttk.Button(btn_frame, text="Run Benchmark Comparison", command=self.start_benchmark)
+        self.btn_bench.pack(fill=tk.X, pady=5)
+
         self.btn_redraw = ttk.Button(btn_frame, text="Update Style Only", command=self.redraw_plot, state=tk.DISABLED)
         self.btn_redraw.pack(fill=tk.X, pady=5)
+        
         self.progress = ttk.Progressbar(self.left_frame, mode='indeterminate')
         self.progress.pack(fill=tk.X, padx=10, pady=5)
 
@@ -147,7 +160,7 @@ class ProtSurfApp:
         self.canvas_frame = ttk.Frame(self.right_frame)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
         self.current_canvas = None
-        lbl = ttk.Label(self.canvas_frame, text="Load a PDB then click Run.\nArpeggio will be invoked automatically if JSON is missing.", font=("Arial", 12))
+        lbl = ttk.Label(self.canvas_frame, text="Load a PDB then click Run.\nFor Benchmark, select the folder containing PDBs.", font=("Arial", 12))
         lbl.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
     def _init_status_bar(self):
@@ -166,8 +179,14 @@ class ProtSurfApp:
         if filename:
             self.entry_file.delete(0, tk.END)
             self.entry_file.insert(0, filename)
-            # Auto-clear Arpeggio field if user picks new PDB, to force re-calculation or manual re-select
             self.entry_arpeggio.delete(0, tk.END)
+
+    def browse_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.entry_file.delete(0, tk.END)
+            self.entry_file.insert(0, folder)
+            self.log(f"Selected folder: {os.path.basename(folder)}")
 
     def browse_arpeggio(self):
         filename = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
@@ -204,13 +223,17 @@ class ProtSurfApp:
         }
 
     def start_analysis(self):
-        pdb_path = self.entry_file.get()
-        if not pdb_path or not os.path.exists(pdb_path):
+        path = self.entry_file.get()
+        if not path or not os.path.exists(path):
             messagebox.showerror("Error", "Please select a valid PDB file.")
+            return
+        
+        if os.path.isdir(path):
+            messagebox.showerror("Error", "Single Analysis requires a .pdb file, not a folder.\nUse 'Run Benchmark' for folders.")
             return
             
         params = {
-            'path': pdb_path,
+            'path': path,
             'chain_a': self.entry_chain_a.get().strip(),
             'chain_b': self.entry_chain_b.get().strip(),
             'arpeggio': self.entry_arpeggio.get().strip(),
@@ -219,10 +242,158 @@ class ProtSurfApp:
             'sigma': float(self.entry_sigma.get())
         }
         self.btn_run.config(state=tk.DISABLED)
+        self.btn_bench.config(state=tk.DISABLED)
         self.btn_redraw.config(state=tk.DISABLED)
         self.progress.start(10)
         self.log("Starting analysis pipeline...")
         threading.Thread(target=self.run_pipeline, args=(params,), daemon=True).start()
+
+    def _generate_auto_csv(self, folder):
+        """Helper to scan folder for PDBs and generate a target CSV."""
+        self.log("Scanning folder for PDB files to generate CSV...")
+        pdbs = [f for f in os.listdir(folder) if f.lower().endswith('.pdb')]
+        
+        if not pdbs:
+            return False, "No .pdb files found in the folder."
+            
+        targets = []
+        for f in pdbs:
+            path = os.path.join(folder, f)
+            try:
+                # Use PDBLoader to identify chains
+                loader = PDBLoader(path)
+                chains = [c.id for c in loader.model]
+                
+                if len(chains) >= 2:
+                    # Pick first two chains by default
+                    # In a real tool, maybe sorting by length would be better, but this is a safe default
+                    cA, cB = chains[0], chains[1]
+                    pdb_id = os.path.splitext(f)[0]
+                    cat = "Auto_Generated"
+                    targets.append([pdb_id, cA, cB, cat])
+                else:
+                    print(f"Skipping {f}: Found {len(chains)} chains, need at least 2.")
+            except Exception as e:
+                print(f"Error reading {f}: {e}")
+                
+        if not targets:
+            return False, "Found PDBs, but none had >= 2 chains."
+            
+        csv_path = os.path.join(folder, "benchmark_targets.csv")
+        try:
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["PDB", "Chain_A", "Chain_B", "Category"])
+                writer.writerows(targets)
+            return True, csv_path
+        except Exception as e:
+            return False, f"Failed to write CSV: {e}"
+
+    def start_benchmark(self):
+        """
+        Smart Benchmark Launcher: Handles both single file and batch folder.
+        """
+        input_path = self.entry_file.get().strip()
+        
+        if not input_path or not os.path.exists(input_path):
+            messagebox.showerror("Error", "Please select a valid PDB file or Folder.")
+            return
+
+        is_batch = os.path.isdir(input_path)
+        chain_a = self.entry_chain_a.get().strip()
+        chain_b = self.entry_chain_b.get().strip()
+        
+        if not is_batch and (not chain_a or not chain_b):
+            messagebox.showerror("Error", "Please define Chain A and Chain B for single file mode.")
+            return
+
+        # Disable buttons
+        self.btn_run.config(state=tk.DISABLED)
+        self.btn_bench.config(state=tk.DISABLED)
+        self.progress.start(10)
+        
+        mode_str = "Batch Folder" if is_batch else "Single File"
+        self.log(f"Running Benchmark ({mode_str})...")
+
+        def run_thread():
+            try:
+                import benchmark
+                
+                if is_batch:
+                    # --- BATCH MODE ---
+                    pdb_dir = input_path
+                    target_csv = os.path.join(pdb_dir, "benchmark_targets.csv")
+                    
+                    # 1. Check if CSV exists, if not, generate it
+                    if not os.path.exists(target_csv):
+                        self.root.after(0, lambda: self.log("CSV missing. Generating from PDBs..."))
+                        success, msg = self._generate_auto_csv(pdb_dir)
+                        if not success:
+                            raise Exception(msg)
+                        self.root.after(0, lambda: self.log("CSV generated."))
+
+                    # 2. Read Tasks
+                    tasks = []
+                    with open(target_csv, 'r') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            tasks.append(row)
+                    
+                    total = len(tasks)
+                    if total == 0:
+                        raise Exception("CSV file is empty.")
+
+                    self.root.after(0, lambda: self.log(f"Found {total} tasks."))
+                    
+                    # 3. Run Loop
+                    for i, task in enumerate(tasks):
+                        pdb_id = task['PDB']
+                        # Robust file finding: Try with and without extension
+                        pdb_file = os.path.join(pdb_dir, f"{pdb_id}.pdb")
+                        if not os.path.exists(pdb_file):
+                             pdb_file = os.path.join(pdb_dir, pdb_id) # maybe extension is in ID
+                        
+                        if not os.path.exists(pdb_file):
+                            print(f"Skipping {pdb_id}, file missing.")
+                            continue
+                            
+                        self.root.after(0, lambda idx=i: self.log(f"Benchmarking {idx+1}/{total}: {pdb_id}..."))
+                        
+                        try:
+                            runner = benchmark.BenchmarkRunner(pdb_file, task['Chain_A'], task['Chain_B'])
+                            # Output settings
+                            runner.output_root = os.path.join(pdb_dir, "benchmark_results")
+                            runner.category = task.get('Category', 'Uncategorized')
+                            
+                            runner.category_dir = os.path.join(runner.output_root, runner.category)
+                            if not os.path.exists(runner.category_dir): os.makedirs(runner.category_dir)
+                            runner.output_csv = os.path.join(runner.category_dir, f"{pdb_id}_benchmark.csv")
+                            
+                            runner.run()
+                        except Exception as e:
+                            print(f"Error on {pdb_id}: {e}")
+
+                    msg = f"Batch Benchmark Complete!\nResults saved in {os.path.join(pdb_dir, 'benchmark_results')}"
+                    
+                else:
+                    # --- SINGLE FILE MODE ---
+                    runner = benchmark.BenchmarkRunner(input_path, chain_a, chain_b)
+                    runner.run()
+                    msg = "Single Benchmark Complete!\nSaved to default folder."
+
+                self.root.after(0, lambda: messagebox.showinfo("Success", msg))
+                self.root.after(0, lambda: self.log("Benchmark Finished."))
+
+            except Exception as e:
+                err_msg = str(e)
+                print(e)
+                self.root.after(0, lambda: messagebox.showerror("Benchmark Error", err_msg))
+            finally:
+                self.root.after(0, lambda: self.progress.stop())
+                self.root.after(0, lambda: self.btn_run.config(state=tk.NORMAL))
+                self.root.after(0, lambda: self.btn_bench.config(state=tk.NORMAL))
+
+        threading.Thread(target=run_thread, daemon=True).start()
 
     def redraw_plot(self):
         if not self.cached_viz or not self.cached_patches: return
@@ -371,11 +542,13 @@ class ProtSurfApp:
         self.current_canvas.mpl_connect('pick_event', self.on_pick)
         self.progress.stop()
         self.btn_run.config(state=tk.NORMAL)
+        self.btn_bench.config(state=tk.NORMAL)
         self.log(f"Success! Displaying {len(patches)} patches.")
 
     def show_error(self, msg):
         self.progress.stop()
         self.btn_run.config(state=tk.NORMAL)
+        self.btn_bench.config(state=tk.NORMAL)
         self.log("Error occurred.")
         messagebox.showerror("Pipeline Error", msg)
 
@@ -383,4 +556,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = ProtSurfApp(root)
     root.mainloop()
-
