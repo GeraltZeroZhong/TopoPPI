@@ -5,6 +5,7 @@ from scipy.spatial import KDTree
 import logging
 import json
 import os
+import re
 
 logger = logging.getLogger("Visualizer")
 
@@ -30,12 +31,13 @@ class InterfaceVisualizer:
         self.tree_B = KDTree(self.coords_B) if not arpeggio_file else None
         self.artist_map = {}
 
-        # Identifiers for mapping Arpeggio data
-        self.chain_a_id = chain_a_id
-        self.chain_b_id = chain_b_id
+        # Ensure IDs are stripped of whitespace for comparison
+        self.chain_a_id = str(chain_a_id).strip() if chain_a_id else None
+        self.chain_b_id = str(chain_b_id).strip() if chain_b_id else None
 
         # --- Interaction Categories (Arpeggio Specifics) ---
         self.interaction_types = [
+            'default',      # <--- Renamed from 'vdw'
             'salt_bridge',
             'cation_pi',
             'pi_stack',     # pi-pi
@@ -47,6 +49,7 @@ class InterfaceVisualizer:
         ]
         
         self.interaction_colors = {
+            'default': '#008080',       # <--- Teal (Nice Color) for default/vdw
             'salt_bridge': '#FFA500',   # Orange
             'cation_pi': '#FF4500',     # OrangeRed
             'pi_stack': '#8A2BE2',      # BlueViolet
@@ -60,37 +63,21 @@ class InterfaceVisualizer:
         # --- Arpeggio Mapping ---
         # Maps raw Arpeggio 'interaction_type' to our canonical list
         self.arpeggio_mapping = {
-            # Ionic / Electrostatic
-            'salt_bridge': 'salt_bridge',
-            'ionic': 'salt_bridge', 
+            'salt_bridge': 'salt_bridge', 'ionic': 'salt_bridge', 
+            'cation_pi': 'cation_pi', 'pi_cation': 'cation_pi',
+            'pi_stack': 'pi_stack', 'pi_pi': 'pi_stack', 'amide_ring': 'pi_stack',
+            'hbond': 'hbond', 'weak_hbond': 'hbond', 'polar': 'hbond', 'weak_polar': 'hbond',
+            'xbond': 'halogen_bond', 'halogen_bond': 'halogen_bond',
+            'sulfur_pi': 'sulfur_pi', 'pi_sulfur': 'sulfur_pi',
+            'hydrophobic': 'hydrophobic', 'aromatic': 'hydrophobic',
+            'metal_complex': 'metal_complex', 'covalent': 'metal_complex',
             
-            # Cation-Pi
-            'cation_pi': 'cation_pi',
-            'pi_cation': 'cation_pi',
-            
-            # Pi-Stacking
-            'pi_stack': 'pi_stack',
-            'pi_pi': 'pi_stack',
-            'amide_ring': 'pi_stack',
-            
-            # Hydrogen Bonds
-            'hbond': 'hbond',
-            'weak_hbond': 'hbond',
-            
-            # Halogen
-            'xbond': 'halogen_bond',
-            'halogen_bond': 'halogen_bond',
-            
-            # Sulfur-Pi
-            'sulfur_pi': 'sulfur_pi',
-            'pi_sulfur': 'sulfur_pi',
-            
-            # Hydrophobic
-            'hydrophobic': 'hydrophobic',
-            
-            # Metal / Others
-            'metal_complex': 'metal_complex',
-            'covalent': 'metal_complex'
+            # Map generic contacts to 'default'
+            'vdw': 'default', 
+            'vdw_clash': 'default', 
+            'clash': 'default',
+            'proximal': 'default',
+            'atom-atom': 'default'
         }
 
         # Data store: { (res_seq, res_name): set([interaction_types]) }
@@ -100,8 +87,9 @@ class InterfaceVisualizer:
             self._load_arpeggio_data(arpeggio_file)
         elif arpeggio_file:
             logger.warning(f"Arpeggio file not found: {arpeggio_file}. Falling back to heuristics.")
+            if self.tree_B is None: self.tree_B = KDTree(self.coords_B)
 
-        # --- Fallback Chemical Definitions (Used only if Arpeggio is missing) ---
+        # --- Fallback Chemical Definitions ---
         self.charged_pos = {'ARG', 'LYS', 'HIS'} 
         self.charged_neg = {'ASP', 'GLU'}
         self.aromatic = {'PHE', 'TYR', 'TRP', 'HIS'}
@@ -111,77 +99,97 @@ class InterfaceVisualizer:
         self.polar_atoms = {'N', 'O', 'S', 'F'}
         self.sulfur_atoms = {'SG', 'SD'}
 
+    def _extract_seq_num(self, val):
+        """Robustly extract integer sequence number from strings like '100', '100A'."""
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            match = re.match(r"^(-?\d+)", str(val))
+            if match:
+                return int(match.group(1))
+            return None
+
     def _load_arpeggio_data(self, json_path):
         """
-        Parses PDBe-Arpeggio JSON output.
-        Stores interactions relevant to Chain A residues interacting with Chain B.
+        Parses PDBe-Arpeggio JSON output with comprehensive debugging.
         """
         try:
             with open(json_path, 'r') as f:
                 data = json.load(f)
             
-            self.arpeggio_data = {}
+            temp_data = {}
             count = 0
+            seen_pairs = set()
+            found_raw_types = set() 
             
-            # Arpeggio JSON structure handling
             interactions = data if isinstance(data, list) else data.get('interactions', [])
 
             for item in interactions:
                 bgn = item.get("bgn", {})
                 end = item.get("end", {})
                 
-                c1 = bgn.get("auth_asym_id")
-                c2 = end.get("auth_asym_id")
+                c1 = bgn.get("auth_asym_id", "").strip()
+                c2 = end.get("auth_asym_id", "").strip()
                 
-                # Check if this is an A-B interaction
+                if c1 and c2:
+                    if c1 > c2: seen_pairs.add((c2, c1))
+                    else: seen_pairs.add((c1, c2))
+                
                 pair = {c1, c2}
-                if pair != {self.chain_a_id, self.chain_b_id}:
+                target_pair = {self.chain_a_id, self.chain_b_id}
+                
+                if pair != target_pair:
                     continue
                 
-                # Identify which part is on Chain A (the surface we are plotting)
                 if c1 == self.chain_a_id:
                     res_info = bgn
                 else:
                     res_info = end
                 
-                try:
-                    res_seq = int(res_info.get("auth_seq_id"))
-                    # res_name = res_info.get("label_comp_id") 
-                except (ValueError, TypeError):
+                raw_seq = res_info.get("auth_seq_id")
+                res_seq = self._extract_seq_num(raw_seq)
+                if res_seq is None:
                     continue
                 
-                # Map Arpeggio type to our category
                 raw_type = item.get("type") 
-                if isinstance(raw_type, list):
-                    raw_types = raw_type
-                else:
-                    raw_types = [raw_type]
+                if isinstance(raw_type, list): raw_types = raw_type
+                else: raw_types = [raw_type]
 
                 mapped_types = set()
                 for rt in raw_types:
+                    found_raw_types.add(rt)
                     mapped = self.arpeggio_mapping.get(rt)
                     if mapped:
                         mapped_types.add(mapped)
                 
-                if not mapped_types:
-                    continue
+                if not mapped_types: continue
 
                 key = res_seq
-                if key not in self.arpeggio_data:
-                    self.arpeggio_data[key] = set()
-                self.arpeggio_data[key].update(mapped_types)
+                if key not in temp_data: temp_data[key] = set()
+                temp_data[key].update(mapped_types)
                 count += 1
+            
+            if count == 0:
+                print("\n" + "="*50)
+                print("[DEBUG] Arpeggio loaded 0 interactions.")
+                print(f"[DEBUG] User requested: Chain '{self.chain_a_id}' vs Chain '{self.chain_b_id}'")
+                print(f"[DEBUG] Pairs found in JSON: {list(seen_pairs)}")
+                print(f"[DEBUG] Types found for A-B pair (but maybe unmapped): {list(found_raw_types)}")
+                print("="*50 + "\n")
                 
-            logger.info(f"Loaded {count} Arpeggio interactions for Chain {self.chain_a_id}.")
+                logger.warning("Falling back to geometric heuristics.")
+                self.arpeggio_data = None
+                if self.tree_B is None: self.tree_B = KDTree(self.coords_B)
+            else:
+                logger.info(f"Loaded {count} Arpeggio interactions for Chain {self.chain_a_id}.")
+                self.arpeggio_data = temp_data
             
         except Exception as e:
             logger.error(f"Failed to load Arpeggio JSON: {e}")
-            self.arpeggio_data = None # Trigger fallback
+            self.arpeggio_data = None 
+            if self.tree_B is None: self.tree_B = KDTree(self.coords_B)
 
     def _get_interaction_type_heuristic(self, atom_A, atom_B, dist):
-        """
-        Fallback classification logic, updated to return specific Arpeggio-like types.
-        """
         if dist > 6.0: return None
         
         res_A = atom_A.get_parent().get_resname()
@@ -198,59 +206,32 @@ class InterfaceVisualizer:
         is_aro_A = (res_A in self.aromatic and name_A not in ['CA', 'C', 'O', 'N'])
         is_aro_B = (res_B in self.aromatic and name_B not in ['CA', 'C', 'O', 'N'])
 
-        # 1. Electrostatic / Salt Bridge / Cation-Pi
         if dist < 5.0:
-            # Salt Bridge (< 4.0A)
-            if dist < 4.0 and ((is_cat_A and is_ani_B) or (is_ani_A and is_cat_B)):
-                return 'salt_bridge'
-            # Cation-Pi (< 5.0A)
+            if dist < 4.0 and ((is_cat_A and is_ani_B) or (is_ani_A and is_cat_B)): return 'salt_bridge'
             if is_aro_A or is_aro_B:
-                if (is_aro_A and is_cat_B) or (is_cat_A and is_aro_B):
-                    return 'cation_pi'
-            # General Attractive Charge -> default to salt_bridge
-            if (is_cat_A and is_ani_B) or (is_ani_A and is_cat_B):
-                return 'salt_bridge'
+                if (is_aro_A and is_cat_B) or (is_cat_A and is_aro_B): return 'cation_pi'
+            if (is_cat_A and is_ani_B) or (is_ani_A and is_cat_B): return 'salt_bridge'
 
-        # 2. Hydrogen Bond
         if dist < 3.8:
-            if elem_A in self.polar_atoms and elem_B in self.polar_atoms:
-                return 'hbond'
-            if (elem_A == 'C' and elem_B in self.polar_atoms) or (elem_B == 'C' and elem_A in self.polar_atoms):
-                return 'hbond'
+            if elem_A in self.polar_atoms and elem_B in self.polar_atoms: return 'hbond'
+            if (elem_A == 'C' and elem_B in self.polar_atoms) or (elem_B == 'C' and elem_A in self.polar_atoms): return 'hbond'
 
-        # 3. Pi-Sulfur
         if dist < 4.5 and (is_aro_A or is_aro_B):
-            if (is_aro_A and name_B in self.sulfur_atoms) or (name_A in self.sulfur_atoms and is_aro_B):
-                return 'sulfur_pi'
+            if (is_aro_A and name_B in self.sulfur_atoms) or (name_A in self.sulfur_atoms and is_aro_B): return 'sulfur_pi'
 
-        # 4. Hydrophobic / Pi-Stack
         if dist < 5.5:
-            # Pi-Stacking
-            if is_aro_A and is_aro_B:
-                return 'pi_stack'
-            
-            # Hydrophobic checks
+            if is_aro_A and is_aro_B: return 'pi_stack'
             if dist < 4.5:
-                is_aliphatic_A = (elem_A == 'C' and not is_aro_A and name_A not in ['CA', 'C'])
-                is_aliphatic_B = (elem_B == 'C' and not is_aro_B and name_B not in ['CA', 'C'])
-                if (is_aro_A and is_aliphatic_B) or (is_aliphatic_A and is_aro_B):
-                    return 'hydrophobic'
-
-            if dist < 4.5 and elem_A == 'C' and elem_B == 'C':
-                if name_A not in ['CA', 'C'] and name_B not in ['CA', 'C']:
-                    is_aliphatic_A = (elem_A == 'C' and not is_aro_A)
-                    is_aliphatic_B = (elem_B == 'C' and not is_aro_B)
-                    if is_aliphatic_A and is_aliphatic_B:
-                        return 'hydrophobic'
-                    if res_A in self.hydrophobic and res_B in self.hydrophobic:
-                        return 'hydrophobic'
+                is_ali_A = (elem_A == 'C' and not is_aro_A and name_A not in ['CA', 'C'])
+                is_ali_B = (elem_B == 'C' and not is_aro_B and name_B not in ['CA', 'C'])
+                if (is_aro_A and is_ali_B) or (is_ali_A and is_aro_B): return 'hydrophobic'
+            if dist < 4.5 and elem_A == 'C' and elem_B == 'C' and name_A not in ['CA', 'C'] and name_B not in ['CA', 'C']:
+                 if (not is_aro_A) and (not is_aro_B): return 'hydrophobic'
 
         return None
 
     def plot_patches(self, patches, output_file=None, show=True, style_config=None):
-        if not patches:
-            return None
-        
+        if not patches: return None
         self.artist_map = {}
         style = {
             'color': 'red', 'font_family': 'sans-serif', 'font_size': 9, 
@@ -292,12 +273,9 @@ class InterfaceVisualizer:
         dists_A_to_patch, vertex_indices = patch_tree.query(self.coords_A)
         on_patch_mask = dists_A_to_patch < 3.0 
         
-        # Identify residues on this patch
         if self.arpeggio_data is not None:
-             # STRATEGY A: Using Arpeggio Data (Fast lookups)
              candidate_indices = np.where(on_patch_mask)[0]
         else:
-            # STRATEGY B: Legacy Heuristic (Geometric query)
             if self.tree_B:
                 dists_A_to_B_coarse, _ = self.tree_B.query(self.coords_A)
                 interaction_mask = dists_A_to_B_coarse < 8.0
@@ -306,25 +284,21 @@ class InterfaceVisualizer:
                 candidate_indices = []
 
         residue_data = {} 
-        
         for idx in candidate_indices:
             atom_A = self.atoms_A[idx]
             parent = atom_A.get_parent()
-            res_id = parent.get_id() # (hetero, seq, ins)
-            res_seq = res_id[1]      # integer sequence number
+            res_id = parent.get_id()
+            res_seq = res_id[1]
             
             u, v = uv[vertex_indices[idx]]
-            
             if res_id not in residue_data: residue_data[res_id] = {'uvs': [], 'types': set()}
             residue_data[res_id]['uvs'].append([u, v])
             
             if style['color_by_type']:
                 if self.arpeggio_data is not None:
-                    # Lookup from Arpeggio
                     if res_seq in self.arpeggio_data:
                         residue_data[res_id]['types'].update(self.arpeggio_data[res_seq])
                 else:
-                    # Calculate on the fly (Heuristic)
                     if self.atoms_B:
                         nearby_b_indices = self.tree_B.query_ball_point(self.coords_A[idx], r=6.0)
                         for b_idx in nearby_b_indices:
@@ -355,11 +329,13 @@ class InterfaceVisualizer:
             else:
                 final_color = style['color']
 
-            # Corrected logic here:
             chain_obj = self.atoms_A[0].get_parent().get_parent()
-            # Directly access residue by ID from the chain object
-            res_obj = chain_obj[res_id]
-            res_name = f"{res_obj.get_resname()}{res_id[1]}"
+            try:
+                res_obj = chain_obj[res_id]
+                res_name = f"{res_obj.get_resname()}{res_id[1]}"
+            except KeyError:
+                 res_name = f"{res_id[1]}"
+
             uid = f"{patch_id}_{res_name}"
             
             sc = ax.scatter(u_center, v_center, c=final_color, s=80, edgecolors='white', zorder=10, picker=5)
