@@ -27,6 +27,7 @@ class ProtSurfApp:
 
         self.cached_viz = None
         self.cached_patches = None
+        self.current_fig = None  # To store the matplotlib figure for saving
         self._picking = False 
 
         # Interaction Types for Arpeggio
@@ -155,6 +156,10 @@ class ProtSurfApp:
         self.btn_redraw = ttk.Button(btn_frame, text="Update Style Only", command=self.redraw_plot, state=tk.DISABLED)
         self.btn_redraw.pack(fill=tk.X, pady=5)
         
+        # [Save Button] - Added feature
+        self.btn_save = ttk.Button(btn_frame, text="Save Figure...", command=self.save_figure, state=tk.DISABLED)
+        self.btn_save.pack(fill=tk.X, pady=5)
+        
         self.progress = ttk.Progressbar(self.left_frame, mode='indeterminate')
         self.progress.pack(fill=tk.X, padx=10, pady=5)
 
@@ -223,6 +228,26 @@ class ProtSurfApp:
             'color_by_type': self.var_color_type.get(),
             'active_types': active_types
         }
+        
+    def save_figure(self):
+        """Save the current plot to a file."""
+        if not self.current_fig:
+            return
+            
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG Image", "*.png"), ("TIFF Image", "*.tif"), ("All Files", "*.*")],
+            title="Save Figure As"
+        )
+        
+        if file_path:
+            try:
+                self.current_fig.savefig(file_path, dpi=300)
+                self.log(f"Figure saved to {file_path}")
+                messagebox.showinfo("Success", f"Image saved successfully to:\n{file_path}")
+            except Exception as e:
+                self.log(f"Error saving image: {e}")
+                messagebox.showerror("Error", f"Failed to save image:\n{e}")
 
     def start_analysis(self):
         path = self.entry_file.get()
@@ -246,6 +271,7 @@ class ProtSurfApp:
         self.btn_run.config(state=tk.DISABLED)
         self.btn_bench.config(state=tk.DISABLED)
         self.btn_redraw.config(state=tk.DISABLED)
+        self.btn_save.config(state=tk.DISABLED)
         self.progress.start(10)
         self.log("Starting analysis pipeline...")
         threading.Thread(target=self.run_pipeline, args=(params,), daemon=True).start()
@@ -311,6 +337,7 @@ class ProtSurfApp:
         # Disable buttons
         self.btn_run.config(state=tk.DISABLED)
         self.btn_bench.config(state=tk.DISABLED)
+        self.btn_save.config(state=tk.DISABLED)
         self.progress.start(10)
         
         mode_str = "Batch Folder" if is_batch else "Single File"
@@ -590,6 +617,7 @@ class ProtSurfApp:
         style = self.get_style_config()
         self.update_plot(self.cached_viz, self.cached_patches, style)
         self.btn_redraw.config(state=tk.NORMAL)
+        self.btn_save.config(state=tk.NORMAL)
 
     def on_pick(self, event):
         if self._picking: return
@@ -609,7 +637,10 @@ class ProtSurfApp:
 
     def update_plot(self, viz, patches, style):
         for widget in self.canvas_frame.winfo_children(): widget.destroy()
+        # Capture figure
         fig = viz.plot_patches(patches, show=False, style_config=style)
+        self.current_fig = fig  # Store figure for saving
+        
         if fig is None:
             self.show_error("Failed to generate plot.")
             return
@@ -620,12 +651,14 @@ class ProtSurfApp:
         self.progress.stop()
         self.btn_run.config(state=tk.NORMAL)
         self.btn_bench.config(state=tk.NORMAL)
+        self.btn_save.config(state=tk.NORMAL) # Enable save button
         self.log(f"Success! Displaying {len(patches)} patches.")
 
     def show_error(self, msg):
         self.progress.stop()
         self.btn_run.config(state=tk.NORMAL)
         self.btn_bench.config(state=tk.NORMAL)
+        self.btn_save.config(state=tk.NORMAL)
         self.log("Error occurred.")
         messagebox.showerror("Pipeline Error", msg)
 
