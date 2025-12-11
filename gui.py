@@ -8,7 +8,7 @@ import csv
 import subprocess
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from Bio.PDB import MMCIFIO
+import gemmi
 
 # Ensure src is in python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -30,7 +30,9 @@ class ProtSurfApp:
         self._picking = False 
 
         # Interaction Types for Arpeggio
+        # 'default' (Generic/VDW) is first in the list
         self.interaction_types_list = [
+            'default',
             'salt_bridge',
             'cation_pi',
             'pi_stack',
@@ -41,9 +43,8 @@ class ProtSurfApp:
             'metal_complex'
         ]
         
-        self.default_active = {
-            'salt_bridge', 'hbond', 'hydrophobic', 'cation_pi', 'pi_stack'
-        }
+        # Only 'default' is shown initially
+        self.default_active = {'default'}
         self.interaction_vars = {}
 
         self.paned_window = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
@@ -267,7 +268,6 @@ class ProtSurfApp:
                 
                 if len(chains) >= 2:
                     # Pick first two chains by default
-                    # In a real tool, maybe sorting by length would be better, but this is a safe default
                     cA, cB = chains[0], chains[1]
                     pdb_id = os.path.splitext(f)[0]
                     cat = "Auto_Generated"
@@ -404,52 +404,109 @@ class ProtSurfApp:
 
     def generate_arpeggio_interactions(self, pdb_path):
         """
-        尝试运行 pdbe-arpeggio。
-        自动将 PDB 转换为 CIF 格式，因为新版 pdbe-arpeggio/gemmi 强制要求 CIF。
+        Generates an Arpeggio-compatible mmCIF file from a PDB.
+        
+        CRITICAL FIX: Standard PDBs lack the '_chem_comp' category required by 
+        pdbe-arpeggio to identify residue types (polymer vs ligand). 
+        We use Gemmi to convert and artificially populate this block.
         """
-        self.log("Arpeggio JSON missing. Attempting to generate...")
+        self.log("Checking Arpeggio requirements...")
         
         pdb_dir = os.path.dirname(os.path.abspath(pdb_path))
         pdb_name = os.path.splitext(os.path.basename(pdb_path))[0]
         
-        # 预期的输出文件
+        # Expected output JSON
         json_name = f"{pdb_name}.json"
         expected_json = os.path.join(pdb_dir, json_name)
         
-        # 如果已有 JSON，直接使用
         if os.path.exists(expected_json):
             self.log(f"Found existing Arpeggio output: {json_name}")
             return expected_json
 
-        # 准备目标文件，默认为原文件
-        target_file = pdb_path
+        # Target CIF file for Arpeggio input
         cif_path = os.path.join(pdb_dir, f"{pdb_name}.cif")
+        target_file = cif_path
 
-        # 检测是否为 PDB 文件，如果是则转换为 CIF
-        if pdb_path.lower().endswith('.pdb'):
-            self.log("Converting PDB to CIF for Arpeggio...")
-            try:
-                # 复用 PDBLoader 加载结构
-                loader = PDBLoader(pdb_path)
-                io = MMCIFIO()
-                io.set_structure(loader.structure)
-                io.save(cif_path)
-                target_file = cif_path # 将目标指向生成的 CIF
-            except Exception as e:
-                self.log(f"CIF Conversion failed: {e}")
-                return None
+        # --- Conversion / Injection Logic ---
+        try:
+            # Always process the file using Gemmi to ensure _chem_comp exists,
+            # even if input is technically .cif but lacks the block.
+            self.log("Preparing Arpeggio-compatible mmCIF...")
+            
+            # 1. Read Structure (handles PDB or CIF)
+            if pdb_path.lower().endswith('.cif'):
+                doc = gemmi.cif.read(pdb_path)
+                block = doc.sole_block()
+                # Check if we need to add chem_comp
+                if not block.find_loop("_chem_comp.id"):
+                    structure = gemmi.read_structure(pdb_path) # Parse to struct to regenerate
+                else:
+                    target_file = pdb_path # Use original if valid
+                    structure = None
+            else:
+                structure = gemmi.read_structure(pdb_path)
 
-        # 调用 pdbe-arpeggio (现在传入的是 CIF 或原本就是 CIF 的文件)
+            # 2. Re-write as MMCIF with _chem_comp if we have a structure object
+            if structure:
+                doc = structure.make_mmcif_document()
+                block = doc.sole_block()
+
+                # Gather unique residue names present in the structure
+                res_names = set()
+                for model in structure:
+                    for chain in model:
+                        for res in chain:
+                            res_names.add(res.name)
+
+                # Define standard amino acids (Peptide linking)
+                # Everything else will be treated as 'non-polymer' (Ligand/Water)
+                STANDARD_AAS = {
+                    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 
+                    'ILE', 'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 
+                    'TYR', 'VAL', 'UNK'
+                }
+
+                # 3. Inject the _chem_comp loop
+                # Headers required by Arpeggio: id, type, name
+                loop = block.init_loop('_chem_comp.', ['id', 'type', 'name'])
+                
+                for r in sorted(res_names):
+                    if r in STANDARD_AAS:
+                        ctype = 'L-peptide linking'
+                        name = 'AMINO ACID'
+                    elif r == 'HOH':
+                        ctype = 'water'
+                        name = 'WATER'
+                    else:
+                        ctype = 'non-polymer'
+                        name = 'LIGAND'
+                    
+                    # CRITICAL FIX: Explicitly quote strings containing spaces
+                    # gemmi.cif.quote ensures 'L-peptide linking' becomes "'L-peptide linking'"
+                    row = [
+                        gemmi.cif.quote(r),
+                        gemmi.cif.quote(ctype),
+                        gemmi.cif.quote(name)
+                    ]
+                    loop.add_row(row)
+
+                doc.write_file(cif_path)
+                target_file = cif_path
+                self.log("Created Arpeggio-compatible CIF with _chem_comp dictionary.")
+
+        except Exception as e:
+            self.log(f"CIF Preparation failed: {e}")
+            return None
+
+        # --- Run Arpeggio ---
         cmd = ["pdbe-arpeggio", target_file]
         
         try:
             self.log(f"Running: pdbe-arpeggio on {os.path.basename(target_file)}...")
-            # 捕获输出以便调试
             subprocess.run(cmd, check=True, cwd=pdb_dir, capture_output=True)
             
             if os.path.exists(expected_json):
                 self.log("Arpeggio JSON generated successfully.")
-                # 更新 GUI 输入框
                 self.root.after(0, lambda: self.entry_arpeggio.delete(0, tk.END))
                 self.root.after(0, lambda: self.entry_arpeggio.insert(0, expected_json))
                 return expected_json
@@ -465,6 +522,7 @@ class ProtSurfApp:
         except FileNotFoundError:
             self.log("Error: 'pdbe-arpeggio' command not found.")
             return None
+
     def run_pipeline(self, params):
         try:
             # --- Step 0: Arpeggio Handling ---
@@ -575,5 +633,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = ProtSurfApp(root)
     root.mainloop()
-
-
