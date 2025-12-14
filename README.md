@@ -1,7 +1,7 @@
 # TopoPPI
 
 ## Overview
-TopoPPI maps protein–protein interfaces onto 2D surfaces so you can quickly inspect the residue contacts that drive binding. The pipeline loads a PDB/CIF structure, builds a solvent-excluded surface for a selected receptor chain, finds interface patches against a ligand chain, flattens those patches with least-squares conformal mapping (LSCM), and renders publication-ready interaction maps. A Tkinter GUI and a CLI are both available for interactive exploration or scripted runs.
+TopoPPI maps protein–protein interfaces onto 2D surfaces so you can quickly inspect the residue contacts that drive binding. The pipeline loads a PDB/CIF structure, builds a solvent-excluded surface for a selected receptor chain, finds interface patches against a ligand chain, flattens those patches with least-squares conformal mapping (LSCM) or Harmonic Parameterization, and renders publication-ready interaction maps. A Tkinter GUI and a CLI are both available for interactive exploration or scripted runs.
 
 ## Features
 - **Multi-format input**: Parse PDB or mmCIF structures via Biopython.
