@@ -7,7 +7,7 @@ TopoPPI maps protein–protein interfaces onto 2D surfaces so you can quickly in
 - **Multi-format input**: Parse PDB or mmCIF structures via Biopython.
 - **Surface generation**: Convert receptor atoms into a Gaussian-smoothed solvent-excluded surface mesh.
 - **Interface detection**: Identify surface patches within a configurable distance cutoff to the ligand chain.
-- **2D parameterization**: Flatten interface patches using LSCM for distortion-minimized maps.
+- **2D parameterization**: Flatten interface patches using LSCM for distortion-minimized maps. If the singular matrix proves intractable to remedy, use Harmonic Parameterization instead.
 - **Visualization**: Export interaction maps that can incorporate Arpeggio interaction annotations.
 - **Two front ends**: Run via command line (`main.py`) or a Tkinter desktop app (`gui.py`).
 
