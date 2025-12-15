@@ -61,6 +61,8 @@ Steps:
   - `topology.py` — Interface patch detection and topology utilities.
   - `parameterization.py` — Patch flattening via LSCM and Harmonic Parameterization.
   - `visualizer.py` — Plotting routines for interface maps.
+- `data/getHuman2ChainsPDB.py` — Downloads Homo sapiens dimers with two chains and normalizes chain IDs to A/B.
+- `sensitivity_analysis.py` — Runs cutoff/sigma sensitivity sweeps and writes interface-area summaries to CSV.
 - `environment.yml` — Conda environment specification with Python and scientific stack dependencies.
 - `LICENSE` — MIT License details.
 
