@@ -155,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            is_draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .draft)"
+            is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
             if [[ "$is_draft" != true ]]; then
               echo "Release $TAG is already public." >&2
               exit 1
