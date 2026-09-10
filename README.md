@@ -4,15 +4,25 @@
   <img width="96" height="96" alt="TopoPPI icon" src="https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/src/topoppi/assets/topoppi.png" />
 </p>
 
-TopoPPI turns a protein complex in PDB or mmCIF format into an annotated two-dimensional map of its interaction surface. The map keeps residue identity, partner contacts, interaction types, chart seams, and run provenance connected to the source structure.
+TopoPPI helps you explore where two proteins meet. Open a PDB or mmCIF structure, choose a pair of chains, and view their interaction surface as a **2D atlas** or an interactive **3D interface**.
 
-The native **3D interface** view shows the same residue regions on the curved surface, connecting the atlas to its molecular geometry. Both views support highlights, numerical annotations and editable atlas files.
+Highlight residues, inspect their contacts, and color the interface with your own numerical data. Save an editable atlas to return to your work, or export figures as PNG, TIFF, SVG or PDF. The desktop app, command line and Python API use the same mapping and annotation tools.
 
-Use the desktop app for an interactive workflow, the `topoppi` command for repeatable single-structure runs, or `topoppi-benchmark` for dataset-scale comparisons.
+**Get started:** [Windows](#windows) · [macOS](#macos) · [Linux](#linux) · [Command line](#command-line) · [Python API](#python-api)
 
-> **TopoPPI 2.1** adds native 3D interface rendering and saved camera views. Download the application from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1). Benchmark evidence uses schema version 2.0.
+## Example outputs
 
-<img width="1600" height="1000" alt="TopoPPI 2.1 desktop displaying the 6VJJ KRAS–RAF1 interface in the native 3D view with four highlighted residue footprints" src="https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-gui-3d.png" />
+These four outputs show the same KRAS–RAF1 interface (PDB **6VJJ**, surface chain A, partner chain B). Magenta highlights Ile36, Glu37, Asp38 and Tyr40 in the first three views.
+
+| **2D residue footprints** | **3D interface** |
+| --- | --- |
+| ![Flat interface atlas with four highlighted residue regions](https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-output-atlas.png) | ![The same residue regions on the curved three-dimensional interface](https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-output-surface.png) |
+| See the full interface and the area occupied by each residue. | Follow the surface shape while retaining the same residue annotations. |
+| **Residue markers** | **Numerical annotations** |
+| ![Labeled contacting residues on the triangular atlas mesh](https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-output-markers.png) | ![Interface colored by the number of contacting partner residues, with a numerical scale](https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-output-values.png) |
+| Locate contacting residues and follow their labels across the map. | Load a CSV file to map your values onto residue regions. |
+
+The numerical example counts contacting partner residues using a 6 Å heavy-atom distance cutoff. See the [Residue footprints guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/docs/residue_footprints.md) for CSV formatting and the [3D interface guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/docs/3d_interface.md) for camera and display controls.
 
 ## Choose a starting point
 
@@ -27,6 +37,8 @@ Use the desktop app for an interactive workflow, the `topoppi` command for repea
 | Reproduce a publication study | [Publication workflow tools](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/tools/publication/README.md) |
 
 ## Install TopoPPI
+
+Choose the **TopoPPI 2.1** package for your operating system below.
 
 ### Windows
 
@@ -77,12 +89,27 @@ topoppi-gui
 
 Launch `topoppi-gui`, or open the installed application on Windows or macOS.
 
+<details>
+<summary>Desktop screenshots: 2D atlas and 3D interface</summary>
+
+**2D atlas:** inspect residue regions and adjust labels, highlights and colors.
+
+![TopoPPI desktop with the 2D residue-footprint atlas and its display controls](https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-gui-sanitized.png)
+
+**3D interface:** rotate the surface and save the view for later editing or export.
+
+![TopoPPI desktop with the native 3D interface and its camera controls](https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-gui-3d.png)
+
+</details>
+
 1. On **Basic**, choose a `.pdb`, `.cif`, or `.mmcif` structure.
 2. Review the detected protein chains and residue counts.
 3. Set **Surface chain** to the protein whose surface you want to map.
 4. Set **Partner chain** to the contacting protein. **Swap A/B** maps the opposite surface.
 5. Choose the output folder and interaction types.
 6. Select **Create Interface Map**.
+
+Once the result appears, choose **2D atlas** or **3D interface** under **View**. Use **Map style** to switch between residue markers and filled residue footprints. **Save Atlas** keeps the result editable; **Save Figure** exports the current view.
 
 TopoPPI generates ProLIF annotations when no interaction JSON is supplied. The completed run writes the image, its `.topoppi.json` run record, and the generated `.prolif.json` file to the chosen output folder. Advanced settings expose the surface, topology, UV, OptCuts, labeling, and export controls.
 

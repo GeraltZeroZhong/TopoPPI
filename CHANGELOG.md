@@ -9,6 +9,7 @@ All notable changes to TopoPPI are documented here.
 - Added GUI camera rotation, pan and zoom, orthographic and perspective projection, a reset control, and double-click recoloring of visible residues.
 - Saved the selected view, camera and mesh settings in editable atlas files, with computation-free switching and export through the GUI and `topoppi render`.
 - Added CLI view, projection, camera and mesh options, plus explicit controls to restore hidden seams and residue borders when restyling saved atlases.
+- Added a README gallery of four native output styles, current desktop screenshots and direct installation and usage links.
 
 ## [2.0] - 2026-09-09
 

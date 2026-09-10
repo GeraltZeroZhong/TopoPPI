@@ -56,6 +56,10 @@ docs/reproducibility.md
 docs/assets/*
 !docs/assets/topoppi-gui-sanitized.png
 !docs/assets/topoppi-gui-3d.png
+!docs/assets/topoppi-output-atlas.png
+!docs/assets/topoppi-output-surface.png
+!docs/assets/topoppi-output-markers.png
+!docs/assets/topoppi-output-values.png
 
 # TopoPPI generated outputs
 interface_map.png
