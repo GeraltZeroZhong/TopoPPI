@@ -1,6 +1,6 @@
 # Residue footprints
 
-TopoPPI 2.0 draws filled residue regions directly on the calculated UV atlas. Each triangle is partitioned into three equal-area quadrilaterals using its corners, edge midpoints and barycentre. Each quadrilateral inherits its corner's source residue. The map includes separated residue pieces, original surface boundaries and both occurrences of each optimization seam.
+TopoPPI draws filled residue regions on the calculated UV atlas and, from version 2.1, on the native 3D interface surface. Each triangle is partitioned into three equal-area quadrilaterals using its corners, edge midpoints and barycentre. Each quadrilateral inherits its corner's source residue. The 2D atlas includes separated residue pieces, original surface boundaries and both occurrences of each optimization seam. The [3D interface view](3d_interface.md) shows these regions on the curved surface with the optimized seams in their structural locations.
 
 Changing colors, labels or external values reuses the UV coordinates. Footprint mode displays every retained optimized patch, including patches below the marker view's interaction-count threshold. `residue_scope` controls labels, highlights and numerical coloring while the complete region geometry stays visible.
 
@@ -46,11 +46,11 @@ Arrowheads on the colorbar indicate displayed values below or above the selected
 
 ## Edit in the desktop app
 
-1. Under **Map Display**, select **Residue footprints**. This selects **Full patch context** by default. **Residue scope** in Advanced settings can narrow annotations to interaction residues.
+1. Under **Map Display**, select **Residue footprints** under **Map style**. Choose **2D atlas** or **3D interface** under **View**. Footprints select **Full patch context** by default. **Residue scope** in Advanced settings can narrow annotations to interaction residues.
 2. Enter selected residues in **Highlight**, separated by commas or spaces. Choose all, highlighted, or no footprint labels.
 3. Use the border and seam controls and the region, highlight and missing-value colors to style the map.
 4. Load a CSV to color by value. Use **Current map** to edit the displayed atlas or **Next run** to prepare values for the next selected structure. Set the colorbar label and optional numerical limits; **Clear** removes the selected annotation layer.
-5. Apply the style to redraw the current atlas. Click a region to recolor that residue across its pieces, or drag a label. When numerical values are active, clear them before assigning manual region colors.
+5. Apply the style to redraw the current atlas. In 2D, click a region to recolor that residue across its pieces, or drag a label. In 3D, drag to rotate the surface and double-click a visible residue to recolor it. When numerical values are active, clear them before assigning manual region colors.
 6. Use **Save Figure** for an image or vector file. Use **Save Atlas** to preserve the editable result, then **Open Atlas** to continue in a later session.
 
 Mode changes and style updates use the cached optimization result. The displayed map identifies its structure and chains, so edits remain associated with the current atlas as another input is prepared. A loaded atlas includes the atom identities, resolved interaction data, UV geometry, external values and plotting style needed for offline editing.
@@ -69,7 +69,7 @@ topoppi render annotated.atlas.npz --clear-annotations \
 
 Rendering reads the geometry, interactions and embedded annotations from the saved atlas. The original structure, input JSON/CSV files and native solver can be stored separately. `--export-atlas` saves the updated style into another atlas file. The compressed NPZ contains numeric/string arrays and JSON.
 
-Saved atlases keep all optimized patches. Switching to marker mode applies its interaction-count threshold; switching back to footprints restores the complete region map.
+Saved atlases keep all optimized patches. The 2D marker view applies its interaction-count threshold; footprints and the 3D interface view display every retained patch. View changes preserve residue annotations, and saved 3D cameras can be reopened or reused by `topoppi render`.
 
 PNG output is 300 dpi. TIFF uses 600 dpi and LZW compression. SVG keeps text editable and PDF embeds TrueType fonts. All four formats share the same renderer. Atlas width is 178 mm; height follows the mapped geometry, with a compact fixed-height footer when a value scale is present.
 
@@ -77,7 +77,8 @@ PNG output is 300 dpi. TIFF uses 600 dpi and LZW compression. SVG keeps text edi
 
 | Option | Purpose |
 | --- | --- |
-| `--map-style markers\|footprints` | Choose the display mode |
+| `--map-style markers\|footprints` | Choose the residue representation |
+| `--view atlas\|surface` | Choose the 2D atlas or 3D interface view |
 | `--highlight RESIDUE ...` | Highlight selected residues; commas are also accepted |
 | `--labels all\|highlighted\|none` | Choose footprint label coverage |
 | `--annotation-file CSV` | Read external residue values |
@@ -86,8 +87,8 @@ PNG output is 300 dpi. TIFF uses 600 dpi and LZW compression. SVG keeps text edi
 | `--footprint-color COLOR` | Set the neutral region color |
 | `--highlight-color COLOR` | Set the selected-residue color |
 | `--missing-color COLOR` | Set unavailable-value color |
-| `--hide-residue-borders` | Hide internal residue borders |
-| `--hide-seams` | Hide optimization seam lines |
+| `--hide-residue-borders`, `--show-residue-borders` | Hide or show internal residue borders |
+| `--hide-seams`, `--show-seams` | Hide or show optimization seam lines |
 | `--export-atlas FILE.npz` | Save complete geometry and editable annotations |
 | `render --clear-annotations` | Remove embedded external values for this rendering |
 

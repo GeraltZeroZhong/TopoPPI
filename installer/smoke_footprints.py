@@ -1,4 +1,4 @@
-"""Exercise footprint editing with the Python runtime installed by a release build."""
+"""Exercise 2D and 3D editing with the Python runtime installed by a release build."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ def main() -> None:
     source = load_atlas(args.atlas)
     image_path = args.output_dir / "desktop-footprints.svg"
     atlas_path = args.output_dir / "desktop-footprints.npz"
+    surface_image = args.output_dir / "desktop-surface.png"
+    surface_atlas = args.output_dir / "desktop-surface.npz"
     values_path = args.output_dir / "values.csv"
 
     root = tk.Tk()
@@ -51,6 +53,16 @@ def main() -> None:
                 app.save_figure()
             with patch("topoppi.gui_app.ui_mixin.filedialog.asksaveasfilename", return_value=str(atlas_path)):
                 app.save_atlas()
+            app.combo_view.set("3D interface")
+            app._view_changed()
+            root.update()
+            axis = app.current_fig._topoppi_surface["axis"]
+            axis.view_init(elev=48, azim=-62)
+            app.current_canvas.draw()
+            with patch("topoppi.gui_app.ui_mixin.filedialog.asksaveasfilename", return_value=str(surface_image)):
+                app.save_figure()
+            with patch("topoppi.gui_app.ui_mixin.filedialog.asksaveasfilename", return_value=str(surface_atlas)):
+                app.save_atlas()
 
         edited = load_atlas(atlas_path)
         assert image_path.stat().st_size > 0
@@ -59,7 +71,17 @@ def main() -> None:
         assert len(source.patches) == len(edited.patches)
         for original, reopened in zip(source.patches, edited.patches, strict=True):
             np.testing.assert_array_equal(as_corner_uv(original), as_corner_uv(reopened))
+        surface = load_atlas(surface_atlas)
+        assert surface_image.stat().st_size > 0
+        assert surface.style["view"] == "surface"
+        assert surface.style["surface_camera"]["elevation"] == 48
+        assert surface.style["surface_camera"]["azimuth"] == -62
+        assert surface.style["annotation_values"] == {key: 1.2}
+        for original, reopened in zip(source.patches, surface.patches, strict=True):
+            np.testing.assert_array_equal(original.vertices, reopened.vertices)
+            np.testing.assert_array_equal(as_corner_uv(original), as_corner_uv(reopened))
         print(f"Installed desktop footprint editing passed: {image_path}")
+        print(f"Installed desktop 3D editing passed: {surface_image}")
     finally:
         app.close()
 

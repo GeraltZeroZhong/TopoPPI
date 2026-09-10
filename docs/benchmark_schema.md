@@ -1,6 +1,6 @@
 # TopoPPI benchmark evidence schema (v2.0)
 
-_A guide to the benchmark reports and evidence artifacts written by TopoPPI 2.0._
+_A guide to the benchmark reports and evidence artifacts written by TopoPPI 2.1._
 
 ---
 
@@ -10,10 +10,10 @@ Each benchmark writes one evidence bundle under `BenchmarkConfig.output_root`.
 The bundle contains a human-readable summary, machine-readable details, row-level
 audit records, resume state, and file checksums.
 
-This guide covers the TopoPPI `2.0` working-tree version. Within
+This guide covers the TopoPPI `2.1` working-tree version. Within
 `benchmark_report.json`, `topoppi_version` identifies the application and
-`schema_version` identifies the serialized layout. Both currently read `2.0`;
-they are versioned independently for readers and analysis scripts.
+`schema_version` identifies the serialized layout. Their current values are
+`2.1` and `2.0`, respectively; each is versioned independently for readers and analysis scripts.
 
 All JSON files use strict JSON syntax. Undefined and non-finite scientific
 values are serialized as `null`, which allows standard JSON parsers to read the
@@ -108,7 +108,7 @@ outside the standard same-domain method comparison.
 | Field | Contents |
 | --- | --- |
 | `schema_version` | Machine-readable report layout, currently `2.0` |
-| `topoppi_version` | TopoPPI application version, currently `2.0` |
+| `topoppi_version` | TopoPPI application version, currently `2.1` |
 | `created_at` | UTC creation time |
 | `config` | Complete serialized `BenchmarkConfig` |
 | `runtime` | Execution model, environment, Git state, resources, hashes, and time budgets |

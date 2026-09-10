@@ -1,13 +1,13 @@
 # macOS application
 
-TopoPPI 2.0 provides disk images for Apple Silicon and Intel Macs:
+TopoPPI 2.1 provides disk images for Apple Silicon and Intel Macs:
 
 ```text
-TopoPPI-2.0-macos-arm64.dmg       Apple Silicon
-TopoPPI-2.0-macos-x86_64.dmg      Intel
+TopoPPI-2.1-macos-arm64.dmg       Apple Silicon
+TopoPPI-2.1-macos-x86_64.dmg      Intel
 ```
 
-Download an image from the [v2.0 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.0),
+Download an image from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1),
 or follow the [local build instructions](#build-locally).
 
 Open **Apple menu > About This Mac** when you need to check the processor. A Mac
@@ -27,7 +27,7 @@ with an Apple chip uses `arm64`; a Mac showing an Intel processor uses `x86_64`.
 The app stores its prepared runtime at:
 
 ```text
-~/Library/Application Support/TopoPPI/2.0-<architecture>
+~/Library/Application Support/TopoPPI/2.1-<architecture>
 ```
 
 Later launches reuse that runtime and start more quickly. The disk image already
@@ -61,7 +61,7 @@ When the app reports a startup failure:
 1. Quit TopoPPI.
 2. In Finder, choose **Go > Go to Folder**.
 3. Open `~/Library/Application Support/TopoPPI`.
-4. Move the `2.0-arm64` or `2.0-x86_64` folder to the Trash.
+4. Move the `2.1-arm64` or `2.1-x86_64` folder to the Trash.
 5. Open TopoPPI again and keep the preparation window open.
 
 This rebuilds the packaged runtime from the copy inside the application.

@@ -2,6 +2,15 @@
 
 All notable changes to TopoPPI are documented here.
 
+## [2.1] - 2026-09-10
+
+- Added a native 3D interface view in the CLI, GUI and Python API, with illuminated surface geometry and optional triangular mesh, residue borders and optimized seams.
+- Shared residue markers, footprints, highlights and numerical annotations between the 2D atlas and 3D surface views. Every retained patch is shown at its original relative position in 3D.
+- Added GUI camera rotation, pan and zoom, orthographic and perspective projection, a reset control, and double-click recoloring of visible residues.
+- Saved the selected view, camera and mesh settings in editable atlas files, with computation-free switching and export through the GUI and `topoppi render`.
+- Added CLI view, projection, camera and mesh options, plus explicit controls to restore hidden seams and residue borders when restyling saved atlases.
+- Added a README gallery of four native output styles, current desktop screenshots and direct installation and usage links.
+
 ## [2.0] - 2026-09-09
 
 - Added native Residue footprints mode in CLI and GUI, with exact per-corner residue regions, complete patch coverage, selected-residue highlighting, labels, boundaries and seams.

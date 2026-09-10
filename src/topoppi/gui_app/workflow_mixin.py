@@ -421,7 +421,7 @@ class WorkflowMixin:
                 viz,
                 params["min_points"],
             )
-            if config.visualization.map_style == "footprints":
+            if config.visualization.map_style == "footprints" or config.visualization.view == "surface":
                 selected_patches = optimized_patches
             self.log(
                 f"Display filter summary (minimum interaction residues = {params['min_points']}): "
@@ -480,6 +480,7 @@ class WorkflowMixin:
                     "invalid_patches": invalid_count,
                     "displayed_patches": len(selected_patches),
                     "footprint_display_uses_complete_domain": config.visualization.map_style == "footprints",
+                    "surface_display_uses_complete_domain": config.visualization.view == "surface",
                 },
             }
             self.set_stage_progress("Render", 100, "Rendering")
