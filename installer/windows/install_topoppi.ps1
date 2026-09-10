@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\TopoPPI",
-    [string]$Version = "2.0",
+    [string]$Version = "2.1",
     [string]$PackageSpec = "",
     [string]$MicromambaUrl = "https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-win-64"
 )

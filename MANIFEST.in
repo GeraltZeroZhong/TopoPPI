@@ -12,6 +12,7 @@ include docs/benchmark_quickstart.example.json
 include docs/benchmark_manifest_template.csv
 include docs/sensitivity_axes.example.json
 include docs/assets/topoppi-gui-sanitized.png
+include docs/assets/topoppi-gui-3d.png
 recursive-include src/topoppi/assets *.ico *.png
 recursive-include installer/windows *.iss *.ps1 *.pyw *.md
 recursive-include installer/macos *.sh *.py *.md *.in *.c TopoPPI

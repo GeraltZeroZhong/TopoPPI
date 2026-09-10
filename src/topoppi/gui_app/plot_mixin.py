@@ -1,4 +1,5 @@
 import tkinter as tk
+from copy import deepcopy
 from tkinter import colorchooser, messagebox
 
 import matplotlib.pyplot as plt
@@ -20,6 +21,7 @@ class PlotMixin:
         successful_run = self._successful_single_run
         if successful_run is None:
             return
+        self._capture_surface_camera()
         try:
             style = self.get_style_config()
         except (ValueError, ConfigurationError) as exc:
@@ -51,6 +53,8 @@ class PlotMixin:
         )
 
     def on_pick(self, event):
+        if self._surface_view() is not None:
+            return
         artist = event.artist
         if not isinstance(artist, (PathCollection, PolyCollection)) or self._busy or self._pending_single_run is not None:
             return
@@ -78,6 +82,7 @@ class PlotMixin:
                 self._remember_interactive_style()
 
     def _remember_interactive_style(self):
+        self._capture_surface_camera()
         successful_run = self._successful_single_run
         style = dict(successful_run["viz"].last_style)
         style.update(
@@ -102,6 +107,12 @@ class PlotMixin:
         successful_run = self._successful_single_run
         if self._busy or self._pending_single_run is not None or successful_run is None or not event.inaxes:
             return
+        surface = self._surface_view()
+        if surface is not None:
+            self._drag_state = None
+            if getattr(event, "dblclick", False) and event.button == 1:
+                self._recolor_surface_residue(surface, event)
+            return
         for gid, objs in successful_run["viz"].artist_map.items():
             txt = objs.get("text")
             if txt is None:
@@ -112,6 +123,8 @@ class PlotMixin:
                 break
 
     def on_mouse_move(self, event):
+        if self._surface_view() is not None:
+            return
         if not self._drag_state or not event.inaxes or event.xdata is None or event.ydata is None:
             return
         gid = self._drag_state["gid"]
@@ -127,6 +140,10 @@ class PlotMixin:
         self.current_canvas.draw_idle()
 
     def on_mouse_release(self, event):
+        if self._surface_view() is not None:
+            self._drag_state = None
+            self._capture_surface_camera()
+            return
         if not self._drag_state:
             return
         gid = self._drag_state["gid"]
@@ -139,6 +156,52 @@ class PlotMixin:
             self._remember_interactive_style()
         self._drag_state = None
 
+    def _surface_view(self):
+        return getattr(getattr(self, "current_fig", None), "_topoppi_surface", None)
+
+    def _capture_surface_camera(self):
+        surface = self._surface_view()
+        successful_run = self._successful_single_run
+        if surface is None or successful_run is None or self._pending_single_run is not None:
+            return None
+        camera = deepcopy(surface["capture_camera"]())
+        successful_run["style"]["surface_camera"] = camera
+        successful_run["viz"].last_style["surface_camera"] = deepcopy(camera)
+        self.loaded_atlas_style["surface_camera"] = deepcopy(camera)
+        return camera
+
+    def reset_surface_view(self):
+        if self._busy or self._pending_single_run is not None:
+            return
+        surface = self._surface_view()
+        if surface is None:
+            self.loaded_atlas_style.pop("surface_camera", None)
+            return
+        surface["reset_camera"]()
+        self._capture_surface_camera()
+        self.current_canvas.draw_idle()
+
+    def _recolor_surface_residue(self, surface, event):
+        viz = self._successful_single_run["viz"]
+        if viz.last_style.get("annotation_values") is not None:
+            self.log("Numeric annotations control region colors. Clear annotations to recolor residues.")
+            return
+        gid = surface["pick_residue"](event)
+        if gid is None or gid not in viz.artist_map:
+            return
+        residue = viz.artist_map[gid]["residue_key"]
+        color = colorchooser.askcolor(title=f"Color for {residue}")[1]
+        if color:
+            self._mark_style_custom()
+            self.residue_color_overrides[residue] = color
+            residue_gids = [key for key, objects in viz.artist_map.items() if objects["residue_key"] == residue]
+            self.marker_color_overrides = {
+                key: value for key, value in self.marker_color_overrides.items()
+                if not any(key == uid or key.startswith(uid + "__piece_") for uid in residue_gids)
+            }
+            self._remember_interactive_style()
+            self.redraw_plot()
+
     def update_plot(
         self,
         viz,
@@ -150,7 +213,8 @@ class PlotMixin:
         run_manifest=None,
         all_patches=None,
     ):
-        previous_render = {name: getattr(viz, name, None) for name in ("artist_map", "last_style", "last_report")}
+        previous_render = {name: getattr(viz, name, None) for name in
+                           ("artist_map", "last_style", "last_report", "capture_surface_camera")}
         try:
             all_patches = list(patches if all_patches is None else all_patches)
             params = run_params if complete_task else self._successful_single_run["params"]
@@ -159,6 +223,7 @@ class PlotMixin:
             patches, _counts = select_patches_for_display(
                 all_patches, viz, map_style=style.get("map_style", "markers"),
                 min_points=params.get("min_points", viz.config.min_points),
+                view=style.get("view", "atlas"),
             )
             fig = viz.plot_patches(patches, show=False, style_config=style)
         except Exception as exc:
@@ -246,8 +311,9 @@ class PlotMixin:
         return True
 
     def _build_plot_toolbar(self, parent):
+        surface = self._surface_view() is not None
         actions = [
-            ("Home", self.current_toolbar.home),
+            ("Reset view", self.reset_surface_view) if surface else ("Home", self.current_toolbar.home),
             ("Back", self.current_toolbar.back),
             ("Forward", self.current_toolbar.forward),
             ("Pan", self.current_toolbar.pan),
@@ -259,7 +325,9 @@ class PlotMixin:
             tk.Button(controls, text=label, command=command, relief=tk.FLAT, padx=8, pady=2).pack(
                 side=tk.LEFT, padx=(0, 4)
             )
-        tk.Label(parent, text="Drag labels to move them; click residues to change colors.",
+        hint = ("Drag to rotate; double-click a residue to change its color." if surface
+                else "Drag labels to move them; click residues to change colors.")
+        tk.Label(parent, text=hint,
                  bg="#ffffff", fg="#52616B", font=(self.config.font_family, 9)).pack(anchor=tk.W)
 
     def _close_current_figure(self):

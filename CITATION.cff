@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use TopoPPI in your research, please cite this software."
 title: "TopoPPI: a geometry-aware platform for visualization and low-distortion mapping of protein–protein interaction interfaces"
-version: "2.0"
-date-released: "2026-09-09"
+version: "2.1"
+date-released: "2026-09-10"
 repository-code: "https://github.com/GeraltZeroZhong/TopoPPI"
 license: "MIT"
 authors:

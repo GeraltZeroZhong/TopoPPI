@@ -462,7 +462,7 @@ class _Figure:
         self.saved.append((path, kwargs))
 
 
-class _SaveHarness(UIMixin):
+class _SaveHarness(UIMixin, PlotMixin):
     def __init__(self, successful_run):
         self._successful_single_run = successful_run
         self.current_fig = successful_run["figure"] if successful_run else None

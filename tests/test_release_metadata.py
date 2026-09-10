@@ -31,7 +31,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertIn(f"## [{__version__}] - {citation_date.group(1)}", changelog)
             self.assertIn(f"/tag/v{__version__}", readme)
         self.assertNotRegex(readme, r'(?:\]\(|src=")\./')
-        self.assertIn("docs/assets/topoppi-gui-sanitized.png", readme)
+        self.assertIn("docs/assets/topoppi-gui-3d.png", readme)
 
         schema = (ROOT / "docs" / "benchmark_schema.md").read_text(encoding="utf-8")
         self.assertTrue(schema.startswith("# TopoPPI benchmark evidence schema (v2.0)\n"))

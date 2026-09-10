@@ -42,7 +42,7 @@ class UIMixin:
         messagebox.showinfo(
             "About TopoPPI",
             f"TopoPPI {__version__}\n\n"
-            "Create annotated 2D maps of protein-protein interfaces.\n\n"
+            "Explore protein-protein interfaces in 2D and 3D.\n\n"
             "Project: github.com/GeraltZeroZhong/TopoPPI",
             parent=self.root,
         )
@@ -67,7 +67,7 @@ class UIMixin:
         ttk.Label(header_text, text=f"TopoPPI {__version__}", style="Header.TLabel").pack(anchor=tk.W, pady=(0, 2))
         ttk.Label(
             header_text,
-            text="Protein interface mapping for reproducible UV atlas figures",
+            text="Protein interfaces in 2D atlases and 3D surface views",
             style="Muted.TLabel",
             wraplength=self.config.sidebar_width - 104,
         ).pack(anchor=tk.W)
@@ -829,16 +829,42 @@ class UIMixin:
         frame = ttk.LabelFrame(parent, text="Map Display", padding=10)
         frame.pack(fill=tk.X, pady=5)
         frame.columnconfigure(1, weight=1)
-        ttk.Label(frame, text="Map style").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(frame, text="View").grid(row=0, column=0, sticky=tk.W)
+        self.view_options = {"2D atlas": "atlas", "3D interface": "surface"}
+        self.combo_view = ttk.Combobox(frame, values=list(self.view_options), state="readonly", width=19)
+        self.combo_view.set("2D atlas")
+        self.combo_view.grid(row=0, column=1, sticky=tk.EW, pady=(0, 4))
+        self.combo_view.bind("<<ComboboxSelected>>", lambda _event: self._view_changed())
+        ttk.Label(frame, text="Map style").grid(row=1, column=0, sticky=tk.W)
         self.map_style_options = {"Residue markers": "markers", "Residue footprints": "footprints"}
         self.combo_map_style = ttk.Combobox(frame, values=list(self.map_style_options), state="readonly", width=19)
         self.combo_map_style.set("Residue markers")
-        self.combo_map_style.grid(row=0, column=1, sticky=tk.EW)
+        self.combo_map_style.grid(row=1, column=1, sticky=tk.EW)
         self.combo_map_style.bind("<<ComboboxSelected>>", lambda _event: self._map_style_changed())
+
+        surface = ttk.Frame(frame)
+        self.surface_controls = surface
+        surface.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=(6, 0))
+        surface.columnconfigure(2, weight=1)
+        self.var_show_mesh = tk.BooleanVar(value=True)
+        ttk.Checkbutton(surface, text="Mesh", variable=self.var_show_mesh, command=self.redraw_plot).grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 6)
+        )
+        ttk.Label(surface, text="Projection").grid(row=0, column=1, sticky=tk.W)
+        self.surface_projection_options = {"Orthographic": "orthographic", "Perspective": "perspective"}
+        self.combo_surface_projection = ttk.Combobox(
+            surface, values=list(self.surface_projection_options), state="readonly", width=12
+        )
+        self.combo_surface_projection.set("Orthographic")
+        self.combo_surface_projection.grid(row=0, column=2, sticky=tk.EW, padx=4)
+        self.combo_surface_projection.bind("<<ComboboxSelected>>", lambda _event: self.redraw_plot())
+        self.btn_reset_surface = ttk.Button(surface, text="Reset view", command=self.reset_surface_view)
+        self.btn_reset_surface.grid(row=0, column=3, sticky=tk.E)
+        surface.grid_remove()
 
         body = ttk.Frame(frame)
         self.footprint_controls = body
-        body.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0))
+        body.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0))
         body.columnconfigure(1, weight=1)
         ttk.Label(body, text="Highlighted residues").grid(row=0, column=0, columnspan=3, sticky=tk.W)
         self.var_highlight_residues = tk.StringVar(value="")
@@ -931,12 +957,28 @@ class UIMixin:
 
     def _map_style_changed(self):
         footprints = self.map_style_options[self.combo_map_style.get()] == "footprints"
-        if footprints:
-            self.footprint_controls.grid()
+        if footprints or self.view_options[self.combo_view.get()] == "surface":
             self.combo_residue_scope.set("Full patch context")
+        self._sync_view_controls()
+        self.toggle_color_mode(mark_custom=False)
+
+    def _view_changed(self):
+        if self.view_options[self.combo_view.get()] == "surface":
+            self.combo_residue_scope.set("Full patch context")
+        self._sync_view_controls()
+        self.toggle_color_mode(mark_custom=False)
+
+    def _sync_view_controls(self):
+        surface = self.view_options[self.combo_view.get()] == "surface"
+        footprints = self.map_style_options[self.combo_map_style.get()] == "footprints"
+        if surface:
+            self.surface_controls.grid()
+        else:
+            self.surface_controls.grid_remove()
+        if surface or footprints:
+            self.footprint_controls.grid()
         else:
             self.footprint_controls.grid_remove()
-        self.toggle_color_mode(mark_custom=False)
 
     def choose_footprint_color(self, key):
         color = colorchooser.askcolor(color=self.footprint_colors[key], title="Footprint color")[1]
@@ -1837,7 +1879,7 @@ class UIMixin:
         if mark_custom:
             self._mark_style_custom()
         self._update_color_controls()
-        if self._successful_single_run:
+        if self._successful_single_run or self._pending_single_run:
             self.redraw_plot()
 
     def _update_color_controls(self):
@@ -1930,7 +1972,8 @@ class UIMixin:
         self.var_show_labels.set(bool(preset["show_labels"]))
         self.var_avoid_overlap.set(bool(preset["avoid_overlap"]))
         self.combo_label_mode.set(preset["label_mode"])
-        if self.map_style_options[self.combo_map_style.get()] != "footprints":
+        if (self.map_style_options[self.combo_map_style.get()] != "footprints"
+                and self.view_options[self.combo_view.get()] != "surface"):
             self.combo_residue_scope.set(preset["residue_scope"])
         self.spin_size.set(int(preset["font_size"]))
         self.var_patch_layout.set(preset["patch_layout"])
@@ -1951,6 +1994,7 @@ class UIMixin:
         font_size = max(self.config.label_font_min_size, min(self.config.label_font_max_size, font_size))
         style = dict(self.loaded_atlas_style)
         footprints = self.map_style_options[self.combo_map_style.get()] == "footprints"
+        surface = self.view_options[self.combo_view.get()] == "surface"
         limits = {}
         for name, variable in (("value_min", self.var_value_min), ("value_max", self.var_value_max)):
             text = variable.get().strip()
@@ -1983,6 +2027,12 @@ class UIMixin:
                 "marker_color_overrides": dict(self.marker_color_overrides),
                 "residue_color_overrides": dict(self.residue_color_overrides),
                 "map_style": "footprints" if footprints else "markers",
+                "view": "surface" if surface else "atlas",
+                "show_mesh": self.var_show_mesh.get(),
+                "surface_projection": self.surface_projection_options[self.combo_surface_projection.get()],
+                "surface_elevation": style.get("surface_elevation", 73.0),
+                "surface_azimuth": style.get("surface_azimuth", -90.0),
+                "surface_zoom": style.get("surface_zoom", 1.0),
                 "highlight_residues": tuple(
                     filter(None, re.split(r"[\s,]+", self.var_highlight_residues.get().strip()))
                 ),
@@ -2096,6 +2146,7 @@ class UIMixin:
         )
 
     def save_figure(self):
+        self._capture_surface_camera()
         successful_run = self._successful_single_run
         if successful_run is None:
             return
@@ -2127,6 +2178,7 @@ class UIMixin:
                 messagebox.showerror("Error", f"Failed to save image:\n{e}")
 
     def save_atlas(self):
+        self._capture_surface_camera()
         successful_run = self._pending_single_run or self._successful_single_run
         if self._busy or successful_run is None:
             return
@@ -2165,6 +2217,7 @@ class UIMixin:
             return
         from topoppi.visualization.atlas_io import load_atlas
 
+        self._capture_surface_camera()
         previous_style = dict(self._successful_single_run["style"]) if self._successful_single_run else {}
         try:
             document = load_atlas(path)
@@ -2206,6 +2259,11 @@ class UIMixin:
         self.marker_color_overrides = dict(style.get("marker_color_overrides", {}))
         self.residue_color_overrides = dict(style.get("residue_color_overrides", {}))
         self.combo_map_style.set("Residue footprints" if style.get("map_style") == "footprints" else "Residue markers")
+        self.combo_view.set("3D interface" if style.get("view") == "surface" else "2D atlas")
+        self.var_show_mesh.set(style.get("show_mesh", True))
+        self.combo_surface_projection.set(
+            "Perspective" if style.get("surface_projection") == "perspective" else "Orthographic"
+        )
         self.var_highlight_residues.set(", ".join(style.get("highlight_residues", ())))
         self._highlights_edited_for_input = False
         self.var_footprint_labels.set(style.get("footprint_labels", "all"))
@@ -2244,10 +2302,7 @@ class UIMixin:
         for name in self.interaction_vars:
             self.interaction_vars[name].set(name in style.get("active_types", self.interaction_types_list))
             self._update_interaction_color_swatch(name)
-        if style.get("map_style") == "footprints":
-            self.footprint_controls.grid()
-        else:
-            self.footprint_controls.grid_remove()
+        self._sync_view_controls()
         self._mark_style_custom()
 
         self._update_color_controls()
@@ -2336,8 +2391,15 @@ class UIMixin:
             style["highlight_residues"] = ()
         style.update({"label_offsets": {}, "marker_color_overrides": {}, "residue_color_overrides": {},
                       "min_points": form.min_points})
+        style.pop("surface_camera", None)
         visualization_keys = {
             "map_style",
+            "view",
+            "show_mesh",
+            "surface_projection",
+            "surface_elevation",
+            "surface_azimuth",
+            "surface_zoom",
             "highlight_residues",
             "annotation_file",
             "annotation_label",

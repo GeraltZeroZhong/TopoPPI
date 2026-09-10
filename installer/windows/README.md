@@ -1,12 +1,12 @@
 # Windows installer
 
-TopoPPI 2.0 provides a bootstrap installer for 64-bit Windows:
+TopoPPI 2.1 provides a bootstrap installer for 64-bit Windows:
 
 ```text
-TopoPPI-2.0-windows-x86_64-setup.exe
+TopoPPI-2.1-windows-x86_64-setup.exe
 ```
 
-Download it from the [v2.0 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.0),
+Download it from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1),
 or follow the [local build instructions](#build-locally).
 
 The setup program creates a private Python 3.10 environment under
@@ -93,7 +93,7 @@ $packageSource = (Resolve-Path .).Path
 .\tools\OptCuts\build_windows_optcuts.ps1 -OutputDir installer\windows
 Push-Location installer\windows
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
-  /DMyAppVersion=2.0 `
+  /DMyAppVersion=2.1 `
   "/DMyPackageSpec=$packageSource" `
   TopoPPI.iss
 Pop-Location
@@ -101,10 +101,10 @@ Pop-Location
 
 This local installer reads the source checkout during setup. For an installer
 distributed to other computers, set `MyPackageSpec` to the source archive of a
-published commit or tag. The v2.0 package spec can be `topoppi==2.0` or its tag archive:
+published commit or tag. The v2.1 package spec can be `topoppi==2.1` or its tag archive:
 
 ```text
-https://github.com/GeraltZeroZhong/TopoPPI/archive/refs/tags/v2.0.zip
+https://github.com/GeraltZeroZhong/TopoPPI/archive/refs/tags/v2.1.zip
 ```
 
 The setup executable is written to `installer/windows/Output/`.

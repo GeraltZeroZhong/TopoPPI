@@ -85,6 +85,9 @@ def save_atlas(path, patches, visualizer, *, style_config=None, run_metadata=Non
     """
     if not patches:
         raise ValueError("Cannot save an empty atlas.")
+    capture = getattr(visualizer, "capture_surface_camera", None)
+    if capture is not None:
+        visualizer.last_style["surface_camera"] = capture()
     arrays, patch_records = {}, []
     for index, patch in enumerate(patches):
         prefix = f"patch_{index}"

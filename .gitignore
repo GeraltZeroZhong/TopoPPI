@@ -55,6 +55,7 @@ docs/reproducibility.md
 # Local visual inspection artifacts
 docs/assets/*
 !docs/assets/topoppi-gui-sanitized.png
+!docs/assets/topoppi-gui-3d.png
 
 # TopoPPI generated outputs
 interface_map.png

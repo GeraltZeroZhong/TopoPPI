@@ -69,6 +69,10 @@ jobs:
             -o /tmp/topoppi-ci-interface.png
           test -s /tmp/topoppi-ci-interface.png
           python -m topoppi.cli render /tmp/topoppi-ci-interface.npz -o /tmp/topoppi-ci-interface.svg
+          python -m topoppi.cli render /tmp/topoppi-ci-interface.npz \
+            --view surface --map-style footprints --labels highlighted \
+            --export-atlas /tmp/topoppi-ci-surface.npz -o /tmp/topoppi-ci-surface.png
+          test -s /tmp/topoppi-ci-surface.png
           xvfb-run -a python installer/smoke_footprints.py /tmp/topoppi-ci-interface.npz /tmp/topoppi-ci-desktop
 
       - name: Build package

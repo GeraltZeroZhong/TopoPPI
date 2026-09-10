@@ -31,13 +31,14 @@ from topoppi.visualization.footprint_rendering import plot_footprints
 logger = logging.getLogger("Visualizer")
 
 
-def select_patches_for_display(patches, visualizer, *, map_style=None, min_points=None):
+def select_patches_for_display(patches, visualizer, *, map_style=None, min_points=None, view=None):
     """Select visible patches and return interaction counts for the complete atlas."""
     patches = list(patches)
     map_style = visualizer.config.map_style if map_style is None else map_style
     min_points = visualizer.config.min_points if min_points is None else min_points
     counts = [int(visualizer.count_patch_interaction_residues(patch)) for patch in patches]
-    if map_style == "footprints":
+    view = getattr(visualizer.config, "view", "atlas") if view is None else view
+    if map_style == "footprints" or view == "surface":
         return patches, counts
     displayed = [patch for patch, count in zip(patches, counts, strict=True) if count >= min_points]
     if patches and not displayed:
@@ -103,6 +104,7 @@ class InterfaceVisualizer:
         self.residue_metadata_B = self._build_residue_metadata(self.atoms_B)
         self._geometric_types_cache = None
         self.artist_map = {}
+        self.capture_surface_camera = None
         self.last_report = {}
         self.last_style = {}
 
@@ -377,6 +379,8 @@ class InterfaceVisualizer:
             "annotation_label": "Value", "value_min": None, "value_max": None,
             "footprint_labels": "all", "show_seams": True, "show_residue_borders": True,
             "footprint_color": "#DCE8EF", "highlight_color": "#A64D79", "missing_color": "#D9D9D9",
+            "view": "atlas", "show_mesh": True, "surface_projection": "orthographic",
+            "surface_elevation": 73., "surface_azimuth": -90., "surface_zoom": 1.,
         }.items():
             style[key] = getattr(self.config, key, default)
         if style_config:
@@ -384,6 +388,12 @@ class InterfaceVisualizer:
         style["residue_scope"] = self._normalize_residue_scope(style["residue_scope"])
         if style["map_style"] not in {"markers", "footprints"}:
             raise ValueError("map_style must be 'markers' or 'footprints'.")
+        if style["view"] not in {"atlas", "surface"}:
+            raise ValueError("view must be 'atlas' or 'surface'.")
+        if style["view"] == "surface":
+            from topoppi.visualization.surface_rendering import plot_surface
+
+            return plot_surface(self, patches, style, output_file=output_file, show=show)
         if style["map_style"] == "footprints":
             if self.interaction_residue_source == "none" and style["residue_scope"] == "interaction":
                 raise ValueError("Interaction scope requires interaction data; use residue_scope='patch' for all residues.")
@@ -604,7 +614,8 @@ class InterfaceVisualizer:
                 uid = f"{patch_id}_{res_name_for_id}"
                 if len(pieces) > 1:
                     uid += f"__piece_{piece_index + 1}"
-                marker_color = style.get("marker_color_overrides", {}).get(uid, final_color)
+                residue_color = style.get("residue_color_overrides", {}).get(residue_label, final_color)
+                marker_color = style.get("marker_color_overrides", {}).get(uid, residue_color)
 
                 sc = ax.scatter(
                     u_center,

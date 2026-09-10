@@ -1,6 +1,6 @@
 #define MyAppName "TopoPPI"
 #ifndef MyAppVersion
-#define MyAppVersion "2.0"
+#define MyAppVersion "2.1"
 #endif
 #ifndef MyPackageSpec
 #define MyPackageSpec ""

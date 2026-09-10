@@ -198,7 +198,7 @@ class OptCutsConfig:
 
 @dataclass(frozen=True)
 class VisualizationConfig:
-    """Parameters for plotting and residue interaction annotation."""
+    """Parameters for 2D/3D plotting and residue annotation."""
 
     show_plot: bool = False
     min_points: int = DEFAULT_MIN_INTERACTION_RESIDUES
@@ -212,6 +212,12 @@ class VisualizationConfig:
     mesh_line_alpha: float = 0.60
     label_offset: float = 0.04
     map_style: str = "markers"
+    view: str = "atlas"
+    show_mesh: bool = True
+    surface_projection: str = "orthographic"
+    surface_elevation: float = 73.0
+    surface_azimuth: float = -90.0
+    surface_zoom: float = 1.0
     highlight_residues: tuple[str, ...] = ()
     annotation_file: str = ""
     annotation_label: str = "Value"
@@ -228,9 +234,16 @@ class VisualizationConfig:
         _require_positive_integer("visualization.min_points", self.min_points)
         if self.map_style not in {"markers", "footprints"}:
             raise ConfigurationError("visualization.map_style must be 'markers' or 'footprints'.")
+        if self.view not in {"atlas", "surface"}:
+            raise ConfigurationError("visualization.view must be 'atlas' or 'surface'.")
+        if self.surface_projection not in {"orthographic", "perspective"}:
+            raise ConfigurationError("visualization.surface_projection must be 'orthographic' or 'perspective'.")
+        for name in ("surface_elevation", "surface_azimuth"):
+            _require_finite_number(f"visualization.{name}", getattr(self, name))
+        _require_positive("visualization.surface_zoom", self.surface_zoom)
         if self.footprint_labels not in {"all", "highlighted", "none"}:
             raise ConfigurationError("visualization.footprint_labels must be 'all', 'highlighted', or 'none'.")
-        for name in ("show_seams", "show_residue_borders"):
+        for name in ("show_seams", "show_residue_borders", "show_mesh"):
             _require_boolean(f"visualization.{name}", getattr(self, name))
         for name in ("value_min", "value_max"):
             if getattr(self, name) is not None:
@@ -239,7 +252,7 @@ class VisualizationConfig:
             raise ConfigurationError("visualization.value_min must be smaller than value_max.")
         if isinstance(self.highlight_residues, str):
             raise ConfigurationError("visualization.highlight_residues must be a sequence of residue keys.")
-        if self.map_style == "footprints":
+        if self.map_style == "footprints" or self.view == "surface":
             from matplotlib.colors import is_color_like
 
             for name in ("footprint_color", "highlight_color", "missing_color"):

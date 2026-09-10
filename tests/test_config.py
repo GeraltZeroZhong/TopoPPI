@@ -17,6 +17,19 @@ from topoppi.errors import ConfigurationError
 
 
 class ConfigTests(unittest.TestCase):
+    def test_surface_camera_accepts_finite_angles_and_positive_zoom(self):
+        VisualizationConfig(view="surface", surface_projection="perspective", surface_elevation=-25.,
+                            surface_azimuth=450., surface_zoom=1.5, show_mesh=False).validate()
+        for field, value in (
+            ("view", "volume"), ("surface_projection", "flat"), ("show_mesh", "false"),
+            ("surface_elevation", float("nan")), ("surface_azimuth", float("inf")),
+            ("surface_zoom", 0.), ("surface_zoom", -1.), ("surface_zoom", float("inf")),
+        ):
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(ConfigurationError, field):
+                replace(VisualizationConfig(), **{field: value}).validate()
+        with self.assertRaisesRegex(ConfigurationError, "footprint_color"):
+            VisualizationConfig(view="surface", footprint_color="invalid-color").validate()
+
     def test_topoppi_defaults_to_the_complete_residue_aware_method(self):
         self.assertEqual(DEFAULT_RESIDUE_FRAGMENTATION_WEIGHT, 20.0)
         self.assertEqual(DEFAULT_RUN_CONFIG.optcuts.residue_fragmentation_weight, 20.0)

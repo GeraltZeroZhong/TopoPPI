@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -20,10 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     defaults = DEFAULT_RUN_CONFIG
     parser = argparse.ArgumentParser(
         prog="topoppi",
-        description="Create an annotated 2D interface map from a protein complex.",
+        description="Create an annotated 2D atlas or 3D interface view from a protein complex.",
         epilog=(
             "Create a map: topoppi complex.pdb -A A -B B -o interface_map.png\n"
             "Restyle an atlas: topoppi render interface.npz -o interface.svg\n"
+            "View its 3D surface: topoppi render interface.npz --view surface -o surface.png\n"
             "Use topoppi render --help for saved-atlas options. Open the desktop app with topoppi-gui."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -68,14 +70,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--residue-scope",
         choices=("interaction", "patch"),
         default=argparse.SUPPRESS,
-        help="Annotation scope: interaction partners or all patch residues (footprints default: patch)",
+        help="Annotation scope: interaction partners or all patch residues (footprints and 3D views default: patch)",
     )
     structure.add_argument(
         "--min-points",
         dest="min_points",
         type=int,
         default=defaults.visualization.min_points,
-        help="Minimum surface-chain interaction residues per visible marker patch; footprints show all patches",
+        help="Minimum interaction residues per visible 2D marker patch; footprints and 3D views show all patches",
     )
     structure.add_argument(
         "--uniform-residue-color",
@@ -215,8 +217,45 @@ def build_parser() -> argparse.ArgumentParser:
     output.add_argument("--show", action="store_true", help="Open the Matplotlib figure after saving")
     output.add_argument("--verbose", "-v", action="store_true", help="Show debug logging")
     output.add_argument("--export-atlas", metavar="FILE.npz", help="Save a self-contained atlas for later rendering")
+    _add_view_options(parser)
     _add_footprint_options(parser)
     return parser
+
+
+def _finite_float(value):
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Use a finite number.") from exc
+    if not math.isfinite(number):
+        raise argparse.ArgumentTypeError("Use a finite number.")
+    return number
+
+
+def _positive_float(value):
+    number = _finite_float(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("Use a positive finite number.")
+    return number
+
+
+def _add_view_options(parser):
+    group = parser.add_argument_group("view and 3D camera")
+    group.add_argument("--view", choices=("atlas", "surface"), default=argparse.SUPPRESS,
+                       help="Render a 2D atlas or the 3D interface surface (new maps: atlas)")
+    mesh = group.add_mutually_exclusive_group()
+    mesh.add_argument("--show-mesh", dest="show_mesh", action="store_true", default=argparse.SUPPRESS,
+                      help="Show the triangular mesh in the 3D view (new maps: shown)")
+    mesh.add_argument("--no-mesh", dest="show_mesh", action="store_false", default=argparse.SUPPRESS,
+                      help="Hide the triangular mesh in the 3D view")
+    group.add_argument("--projection", dest="surface_projection", choices=("orthographic", "perspective"),
+                       default=argparse.SUPPRESS, help="3D camera projection (new maps: orthographic)")
+    group.add_argument("--elevation", dest="surface_elevation", type=_finite_float, default=argparse.SUPPRESS,
+                       metavar="DEGREES", help="3D camera elevation in degrees (new maps: 73)")
+    group.add_argument("--azimuth", dest="surface_azimuth", type=_finite_float, default=argparse.SUPPRESS,
+                       metavar="DEGREES", help="3D camera azimuth in degrees (new maps: -90)")
+    group.add_argument("--zoom", dest="surface_zoom", type=_positive_float, default=argparse.SUPPRESS,
+                       metavar="FACTOR", help="Positive 3D zoom factor; larger values zoom in (new maps: 1)")
 
 
 def _add_footprint_options(parser):
@@ -234,10 +273,16 @@ def _add_footprint_options(parser):
                        help="Upper colorbar limit; values above it use the endpoint color and an extension marker")
     group.add_argument("--labels", dest="footprint_labels", choices=("all", "highlighted", "none"),
                        default=argparse.SUPPRESS, help="Footprint labels within the annotation scope (new maps: all)")
-    group.add_argument("--hide-seams", dest="show_seams", action="store_false", default=argparse.SUPPRESS,
-                       help="Hide cut-seam outlines on footprint maps")
-    group.add_argument("--hide-residue-borders", dest="show_residue_borders", action="store_false",
-                       default=argparse.SUPPRESS, help="Hide internal residue borders on footprint maps")
+    seams = group.add_mutually_exclusive_group()
+    seams.add_argument("--show-seams", dest="show_seams", action="store_true", default=argparse.SUPPRESS,
+                       help="Show optimized cut-seam outlines (new maps: shown)")
+    seams.add_argument("--hide-seams", dest="show_seams", action="store_false", default=argparse.SUPPRESS,
+                       help="Hide optimized cut-seam outlines")
+    borders = group.add_mutually_exclusive_group()
+    borders.add_argument("--show-residue-borders", dest="show_residue_borders", action="store_true",
+                         default=argparse.SUPPRESS, help="Show borders between residue footprints (new maps: shown)")
+    borders.add_argument("--hide-residue-borders", dest="show_residue_borders", action="store_false",
+                         default=argparse.SUPPRESS, help="Hide borders between residue footprints")
     for name, meaning in (("footprint-color", "Base region color"),
                           ("highlight-color", "Highlighted region color"),
                           ("missing-color", "Color for missing numeric values")):
@@ -246,7 +291,8 @@ def _add_footprint_options(parser):
 
 
 def _visualization_overrides(args):
-    names = ("map_style", "annotation_file", "annotation_label", "value_min", "value_max", "footprint_labels",
+    names = ("map_style", "view", "show_mesh", "surface_projection", "surface_elevation", "surface_azimuth",
+             "surface_zoom", "annotation_file", "annotation_label", "value_min", "value_max", "footprint_labels",
              "show_seams", "show_residue_borders", "footprint_color", "highlight_color", "missing_color")
     changes = {name: getattr(args, name) for name in names if hasattr(args, name)}
     if hasattr(args, "highlight"):
@@ -274,6 +320,7 @@ def _render_atlas(argv):
     parser.add_argument("--residue-scope", choices=("interaction", "patch"), default=argparse.SUPPRESS,
                         help="Annotate interaction partners or all patch residues")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show debug logging")
+    _add_view_options(parser)
     _add_footprint_options(parser)
     args = parser.parse_args(argv)
     setup_logging(args.verbose)
@@ -291,12 +338,17 @@ def _render_atlas(argv):
             style.pop("annotation_values", None)
             style["annotation_file"] = ""
         style.update(changes)
+        if any(name in changes for name in ("surface_projection", "surface_elevation", "surface_azimuth", "surface_zoom")):
+            style.pop("surface_camera", None)
         if hasattr(args, "residue_scope"):
             style["residue_scope"] = args.residue_scope
-        elif changes.get("map_style") == "footprints" and document.style.get("map_style") != "footprints":
+        elif (changes.get("map_style") == "footprints" and document.style.get("map_style") != "footprints") or (
+            changes.get("view") == "surface" and document.style.get("view", "atlas") != "surface"
+        ):
             style["residue_scope"] = "patch"
         displayed_patches, _counts = select_patches_for_display(
             document.patches, document.visualizer, map_style=style.get("map_style", "markers"),
+            view=style.get("view", "atlas"),
             min_points=style.get("min_points", document.visualizer.config.min_points),
         )
         figure = document.visualizer.plot_patches(displayed_patches, output_file=args.output, show=False,
@@ -308,7 +360,7 @@ def _render_atlas(argv):
         import matplotlib.pyplot as plt
 
         plt.close(figure)
-        log.info("Saved map to %s; reused the stored UV coordinates.", args.output)
+        log.info("Saved %s view to %s using the stored atlas geometry.", style.get("view", "atlas"), args.output)
     except (TopoPPIError, OSError, ValueError, KeyError) as exc:
         log.error("%s", exc)
         return 1
@@ -379,8 +431,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             DEFAULT_RUN_CONFIG.visualization,
             show_plot=args.show,
             min_points=args.min_points,
-            residue_scope=getattr(args, "residue_scope", "patch" if getattr(args, "map_style", "markers") == "footprints"
-                                  else DEFAULT_RUN_CONFIG.visualization.residue_scope),
+            residue_scope=getattr(
+                args, "residue_scope", "patch" if (
+                    getattr(args, "map_style", "markers") == "footprints" or getattr(args, "view", "atlas") == "surface"
+                ) else DEFAULT_RUN_CONFIG.visualization.residue_scope,
+            ),
             color_by_interaction_type=getattr(
                 args,
                 "color_by_interaction_type",

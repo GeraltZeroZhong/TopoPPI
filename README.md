@@ -6,11 +6,13 @@
 
 TopoPPI turns a protein complex in PDB or mmCIF format into an annotated two-dimensional map of its interaction surface. The map keeps residue identity, partner contacts, interaction types, chart seams, and run provenance connected to the source structure.
 
+The native **3D interface** view shows the same residue regions on the curved surface, connecting the atlas to its molecular geometry. Both views support highlights, numerical annotations and editable atlas files.
+
 Use the desktop app for an interactive workflow, the `topoppi` command for repeatable single-structure runs, or `topoppi-benchmark` for dataset-scale comparisons.
 
-> **TopoPPI 2.0** adds native Residue footprints, editable atlas files, and a refined desktop workflow. Download the application from the [v2.0 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.0). Benchmark evidence uses schema version 2.0.
+> **TopoPPI 2.1** adds native 3D interface rendering and saved camera views. Download the application from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1). Benchmark evidence uses schema version 2.0.
 
-<img width="1400" height="900" alt="TopoPPI 2.0 desktop displaying the 6VJJ KRAS–RAF1 interface in Residue footprints mode with four highlighted residues" src="https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-gui-sanitized.png" />
+<img width="1600" height="1000" alt="TopoPPI 2.1 desktop displaying the 6VJJ KRAS–RAF1 interface in the native 3D view with four highlighted residue footprints" src="https://raw.githubusercontent.com/GeraltZeroZhong/TopoPPI/HEAD/docs/assets/topoppi-gui-3d.png" />
 
 ## Choose a starting point
 
@@ -20,6 +22,7 @@ Use the desktop app for an interactive workflow, the `topoppi` command for repea
 | Make a first map on a Mac | [Install the macOS app](#macos) and use the **Basic** page |
 | Use Linux or automate one structure | [Install with Conda and pip](#linux) and run `topoppi` |
 | Call TopoPPI from Python | [Python API](#python-api) |
+| Inspect a saved atlas in three dimensions | [3D interface view](#3d-interface-view) |
 | Compare methods across a dataset | [Benchmark a dataset](#benchmark-a-dataset) |
 | Reproduce a publication study | [Publication workflow tools](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/tools/publication/README.md) |
 
@@ -30,10 +33,10 @@ Use the desktop app for an interactive workflow, the `topoppi` command for repea
 Download the 64-bit Windows installer:
 
 ```text
-TopoPPI-2.0-windows-x86_64-setup.exe
+TopoPPI-2.1-windows-x86_64-setup.exe
 ```
 
-Get the installer from the [v2.0 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.0). Open it and keep its setup window open while it creates the private environment. A fresh installation commonly takes 5–15 minutes and uses GitHub, conda-forge, and PyPI. After setup, open **TopoPPI GUI** from the Start Menu. Routine analysis of local structures can run offline.
+Get the installer from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1). Open it and keep its setup window open while it creates the private environment. A fresh installation commonly takes 5–15 minutes and uses GitHub, conda-forge, and PyPI. After setup, open **TopoPPI GUI** from the Start Menu. Routine analysis of local structures can run offline.
 
 The current installer is unsigned, so Windows SmartScreen may ask you to confirm the file. Download it from the project release page, select **More info**, then select **Run anyway**. Upgrade, repair, removal, and local build instructions are in the [Windows guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/installer/windows/README.md).
 
@@ -42,17 +45,17 @@ The current installer is unsigned, so Windows SmartScreen may ask you to confirm
 Download the disk image for your Mac's architecture:
 
 ```text
-TopoPPI-2.0-macos-arm64.dmg       Apple Silicon
-TopoPPI-2.0-macos-x86_64.dmg      Intel
+TopoPPI-2.1-macos-arm64.dmg       Apple Silicon
+TopoPPI-2.1-macos-x86_64.dmg      Intel
 ```
 
-Get the disk image from the [v2.0 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.0). Open it, drag **TopoPPI** to **Applications**, and open the app. The app uses ad-hoc signing. If macOS blocks it, open **System Settings > Privacy & Security**, choose **Open Anyway** for TopoPPI, and confirm **Open**. Older macOS releases may also offer **Open** through the app's Control-click menu. Keep the preparation window open while the bundled runtime expands. Later launches reuse that runtime.
+Get the disk image from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1). Open it, drag **TopoPPI** to **Applications**, and open the app. The app uses ad-hoc signing. If macOS blocks it, open **System Settings > Privacy & Security**, choose **Open Anyway** for TopoPPI, and confirm **Open**. Older macOS releases may also offer **Open** through the app's Control-click menu. Keep the preparation window open while the bundled runtime expands. Later launches reuse that runtime.
 
 The app includes Python, scientific dependencies, and native OptCuts, and supports macOS 12 or later. Startup recovery, upgrades, removal, and local build instructions are in the [macOS guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/installer/macos/README.md).
 
 ### Linux
 
-TopoPPI uses Python 3.10. Create an environment, install version 2.0 from PyPI, and launch the desktop app:
+TopoPPI uses Python 3.10. Create an environment, install version 2.1 from PyPI, and launch the desktop app:
 
 ```bash
 conda create -n topoppi -c conda-forge \
@@ -60,7 +63,7 @@ conda create -n topoppi -c conda-forge \
   matplotlib trimesh networkx pillow rtree shapely \
   mdanalysis rdkit psutil tqdm meshio pip
 conda activate topoppi
-python -m pip install "topoppi[all]==2.0"
+python -m pip install "topoppi[all]==2.1"
 topoppi-install-optcuts
 command -v OptCuts_bin
 topoppi-gui
@@ -125,9 +128,13 @@ Useful defaults and options:
 | `-A`, `--chain-a` | `A` | Surface protein |
 | `-B`, `--chain-b` | `B` | Partner used to locate the interface |
 | `--cutoff` | `4.0 Å` | Maximum surface-face distance to Chain B |
-| `--min-points` | `1` | Minimum interaction residues needed to display a retained patch |
-| `--residue-scope` | `interaction` | Annotate interaction residues; `patch` shows the full mapped context |
+| `--min-points` | `1` | Minimum interaction residues per visible 2D marker patch |
+| `--residue-scope` | `interaction` | Annotation scope; footprints and 3D views default to `patch` |
 | `--map-style` | `markers` | `footprints` draws filled residue regions, boundaries, and seams |
+| `--view` | `atlas` | `surface` displays the interface in 3D |
+| `--projection` | `orthographic` | `perspective` adds camera perspective in 3D |
+| `--elevation`, `--azimuth`, `--zoom` | `73`, `-90`, `1` | 3D camera angles in degrees and positive zoom factor |
+| `--no-mesh`, `--show-mesh` | shown | Hide or show the 3D triangular mesh |
 | `--interaction-source` | `prolif` | `geometric` explicitly uses heavy-atom contact partners for optimization weights |
 | `--res` | `1.0 Å` | Surface grid spacing |
 | `--max-voxels` | `40,000,000` | Dense-grid allocation budget |
@@ -142,7 +149,7 @@ Run `topoppi --help` for mapping options and `topoppi render --help` for saved-a
 
 ### Residue footprints
 
-Choose **Residue footprints** in the desktop app's **Map Display** controls, or add `--map-style footprints` to a CLI run. This mode draws the complete residue regions on the calculated UV surface, including disconnected pieces. It supports selected-residue highlighting, external numerical annotations, boundary and seam controls, and editable SVG/PDF exports.
+Choose **Residue footprints** in the desktop app's **Map Display** controls, or add `--map-style footprints` to a CLI run. This style draws complete residue regions, including disconnected pieces, in either the 2D atlas or the 3D interface view. It supports selected-residue highlighting, external numerical annotations, boundary and seam controls, and editable SVG/PDF exports.
 
 ```bash
 topoppi complex.cif -A A -B B --map-style footprints \
@@ -158,6 +165,27 @@ topoppi render interface.atlas.npz --annotation-file effects.csv \
 CSV files use UTF-8, including exports with a byte-order mark. Colorbar arrowheads show when values extend beyond a selected scale. The GUI distinguishes annotations for the current map from those prepared for the next run.
 
 See the [Residue footprints guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/docs/residue_footprints.md) for CSV examples, complete options, the Python API and reproducible rendering.
+
+### 3D interface view
+
+In **Map Display**, set **View** to **3D interface** and choose **Residue markers** or **Residue footprints** under **Map style**. Drag to rotate; use the navigation toolbar to pan or zoom. **Mesh**, **Projection** and **Reset view** control the surface display and camera. Double-click a visible residue to edit its manual color. Numerical annotations share the value scale used by the atlas.
+
+To render a saved atlas in 3D:
+
+```bash
+topoppi render interface.atlas.npz \
+  --view surface --map-style footprints \
+  --highlight A:GLU:37 A:TYR:40 --labels highlighted \
+  --elevation 73 --azimuth -90 --zoom 1 \
+  --export-atlas surface.atlas.npz -o interface_3d.png
+
+topoppi render surface.atlas.npz --no-mesh -o interface_3d.pdf
+topoppi render surface.atlas.npz --view atlas -o interface_2d.svg
+```
+
+The 3D view uses the stored surface vertices and preserves the relative positions of all retained patches. Switching views reuses the completed atlas. **Save Atlas** preserves the camera for subsequent editing and export. Rendering runs entirely in TopoPPI with Matplotlib; PyMOL is optional for separate molecular illustrations.
+
+See the [3D interface guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/docs/3d_interface.md) for camera settings, annotations and the Python API.
 
 ### Python API
 
@@ -214,7 +242,7 @@ The adjacent `.topoppi.json` file records the exact input hash, chains, settings
 
 - TopoPPI reads the first structural model and uses recognized amino-acid heavy atoms from Chain A.
 - The molecular surface is a Gaussian-density isosurface extracted with marching cubes.
-- Interface faces are selected from their distance to Chain B heavy atoms. GUI, CLI, and Python single-run defaults all use `4.0 Å` in version 2.0.
+- Interface faces are selected from their distance to Chain B heavy atoms. GUI, CLI, and Python single-run defaults all use `4.0 Å`.
 - UV coordinates are stored per face corner, so both sides of a seam keep their own coordinates.
 - Multiple retained patches are packed with deterministic transforms and an explicit chart gap.
 
