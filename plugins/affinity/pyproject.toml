@@ -26,7 +26,7 @@ models = [
   # The last official Intel macOS Torch wheel (2.2.2) needs NumPy's 1.x ABI.
   "numpy>=1.26,<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
 ]
-dev = ["pytest>=8", "build>=1", "ruff>=0.4"]
+dev = ["pytest>=8", "build>=1", "ruff>=0.4", "POT>=0.9"]
 
 [project.entry-points."topoppi.plugins"]
 affinity = "topoppi_affinity.plugin:plugin"
