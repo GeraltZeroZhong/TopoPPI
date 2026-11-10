@@ -2,7 +2,7 @@
 
 ![TopoPPI 2.1 showing the 6VJJ KRAS–RAF1 interface in 3D with four highlighted residue footprints.](assets/topoppi-gui-3d.png)
 
-TopoPPI 2.1 renders the calculated interface as a shaded three-dimensional surface. It uses the original mesh vertices and the residue identities already stored in the atlas. All retained patches share a common display frame and preserve their original relative positions. Residue footprints follow the curved surface, and seam outlines locate the cuts used by the two-dimensional atlas.
+TopoPPI renders the calculated interface as a shaded three-dimensional surface. It uses the original mesh vertices and the residue identities already stored in the atlas. All retained patches share a common display frame and preserve their original relative positions. Residue footprints follow the curved surface, and seam outlines locate the cuts used by the two-dimensional atlas.
 
 Rendering uses the Matplotlib backend included with TopoPPI. An existing atlas supplies the geometry, interactions, residue values and saved camera needed for viewing and export.
 

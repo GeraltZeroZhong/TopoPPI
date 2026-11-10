@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from topoppi.config import DEFAULT_RUN_CONFIG
@@ -16,6 +17,7 @@ from topoppi.pipeline import (
     _prepare_output_path,
     _render_output,
     _resolve_prolif_file,
+    layout_interface,
     run_interface_mapping,
 )
 
@@ -23,6 +25,28 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class PipelineTests(unittest.TestCase):
+    def test_shared_layout_defaults_are_standard_and_explicit_controls_are_preserved(self):
+        from topoppi.config import OptCutsConfig
+
+        prepared = SimpleNamespace(source={"path": "input.pdb"},
+            partners=(SimpleNamespace(chains=("A",), layout_patches=lambda: []), SimpleNamespace(chains=("B",))),
+            chain_data=lambda side: ([], [], [], []), contacts=lambda side: {})
+        explicit = OptCutsConfig(residue_fragmentation_weight=0.0, optcuts_mode=10)
+        for selected in (None, explicit):
+            with (
+                self.subTest(explicit=selected is not None),
+                mock.patch("topoppi.pipeline.OptCutsUVOptimizer") as optimizer,
+                mock.patch("topoppi.pipeline._parameterize_patches", return_value=[]),
+                mock.patch("topoppi.pipeline._optimize_patches", return_value={}),
+            ):
+                layout_interface(prepared, optcuts=selected)
+                effective = optimizer.call_args.args[0]
+                if selected is None:
+                    self.assertEqual(effective.residue_fragmentation_weight, 20.0)
+                    self.assertEqual(effective.optcuts_mode, effective.optcuts_headless_mode)
+                else:
+                    self.assertIs(effective, explicit)
+
     def test_explicit_geometric_source_skips_prolif_generation(self):
         config = replace(DEFAULT_RUN_CONFIG, interaction_source="geometric")
         with mock.patch("topoppi.pipeline.generate_prolif_interactions") as generate:
@@ -279,6 +303,10 @@ class PipelineTests(unittest.TestCase):
             optimizer.preflight_binary.return_value = artifact
             patch = mock.Mock()
             chain_data = ([], [], [], [])
+            prepared = mock.Mock()
+            prepared.partners = [mock.Mock(surface_report={}, topology_report={})]
+            prepared.partners[0].layout_patches.return_value = [patch]
+            prepared.metadata.return_value = {"analysis_id": "test"}
             with (
                 mock.patch("topoppi.pipeline.OptCutsUVOptimizer", return_value=optimizer),
                 mock.patch(
@@ -290,8 +318,7 @@ class PipelineTests(unittest.TestCase):
                     "topoppi.pipeline._build_interaction_partner_map",
                     return_value=(interaction_partners, "prolif"),
                 ) as build_interaction_partner_map,
-                mock.patch("topoppi.pipeline._generate_surface", return_value=(mock.Mock(), {})),
-                mock.patch("topoppi.pipeline._extract_patches", return_value=([patch], {})),
+                mock.patch("topoppi.pipeline.prepare_interface", return_value=prepared),
                 mock.patch("topoppi.pipeline._parameterize_patches", return_value=[patch]),
                 mock.patch(
                     "topoppi.pipeline._optimize_patches",

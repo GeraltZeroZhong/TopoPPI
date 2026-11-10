@@ -1,14 +1,17 @@
 # macOS application
 
-TopoPPI 2.1 provides disk images for Apple Silicon and Intel Macs:
+This guide describes TopoPPI 3.0.0 source builds and installation. Build the current
+checkout using the [local instructions](#build-locally). Disk-image filenames
+use the source version and target architecture:
 
 ```text
-TopoPPI-2.1-macos-arm64.dmg       Apple Silicon
-TopoPPI-2.1-macos-x86_64.dmg      Intel
+TopoPPI-<version>-macos-arm64.dmg       Apple Silicon
+TopoPPI-<version>-macos-x86_64.dmg      Intel
 ```
 
-Download an image from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1),
-or follow the [local build instructions](#build-locally).
+The TopoPPI paper uses **v2.1**. Its [release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1)
+and [version-specific macOS instructions](https://github.com/GeraltZeroZhong/TopoPPI/blob/v2.1/installer/macos/README.md)
+remain available. Select the matching release when reproducing that version.
 
 Open **Apple menu > About This Mac** when you need to check the processor. A Mac
 with an Apple chip uses `arm64`; a Mac showing an Intel processor uses `x86_64`.
@@ -27,7 +30,7 @@ with an Apple chip uses `arm64`; a Mac showing an Intel processor uses `x86_64`.
 The app stores its prepared runtime at:
 
 ```text
-~/Library/Application Support/TopoPPI/2.1-<architecture>
+~/Library/Application Support/TopoPPI/<version>-<architecture>
 ```
 
 Later launches reuse that runtime and start more quickly. The disk image already
@@ -35,9 +38,22 @@ contains Python, the scientific dependencies and OptCuts. Runtime preparation
 and analysis use these local files and work offline.
 
 TopoPPI, OptCuts, and third-party license notices are stored inside the app at
-`Contents/Resources`. The machine-readable inventory records packages whose
-upstream metadata leaves the license file unspecified, for review during
-release preparation.
+`Contents/Resources`. A machine-readable inventory provides the bundled package and license metadata.
+
+## Binding analysis in 3.0
+
+Choose **Binding analysis...** for **Binding affinity**, **Mutation effects**, or
+**Rank hotspots**. Affinity supplies the first two tasks; Hotspot supplies the
+third. Install matching plugin wheels through **Plugins → Manage Plugins... →
+Install from file...**, or include the plugins in the runtime before building
+the app. Each task has an official bundled CPU model for offline prediction
+from local structures.
+
+The [desktop guide](../../docs/desktop.md#binding-analysis) covers the three
+workflows and residue-to-variant selection. The [Affinity guide](../../plugins/affinity/docs/workflow.md)
+and [Hotspot guide](../../plugins/hotspot/README.md) describe outputs, model scope
+and optional custom models. Advanced neural models use their separately
+installed dependencies and declared resources.
 
 ## Upgrade
 
@@ -61,7 +77,7 @@ When the app reports a startup failure:
 1. Quit TopoPPI.
 2. In Finder, choose **Go > Go to Folder**.
 3. Open `~/Library/Application Support/TopoPPI`.
-4. Move the `2.1-arm64` or `2.1-x86_64` folder to the Trash.
+4. Move the folder matching the affected app version and architecture to the Trash.
 5. Open TopoPPI again and keep the preparation window open.
 
 This rebuilds the packaged runtime from the copy inside the application.
@@ -88,7 +104,9 @@ TopoPPI and its runtime dependencies. Install these build tools as well:
 - `conda-pack`
 - network access for the pinned OptCuts source checkout
 
-Use the package version directly from the source tree:
+To include the three prediction tasks, install `./plugins/affinity` and
+`./plugins/hotspot` in that environment before packaging. Use the package version
+directly from the source tree:
 
 ```bash
 python -m pip install "prolif>=2.0"
@@ -113,15 +131,8 @@ When testing another build with the same application version, remove its
 prepared runtime as described in [Repair startup](#repair-startup). The next
 launch expands the runtime from the updated application.
 
-## Release contract
+## Packaged components
 
-The `macOS App` GitHub Actions workflow builds on native Apple Silicon and Intel
-macOS 15 runners. Each job runs a full command-line mapping with its native
-OptCuts executable, creates the application disk image, expands the packaged
-runtime, and creates a footprint map with the packaged executable. It then
-reopens the saved atlas through the CLI and exercises Tk highlighting, numerical
-annotation, figure export and atlas saving. The image passes to the central
-`Publish` workflow after these checks.
+The disk image contains the application, a Python runtime, scientific dependencies and the matching native OptCuts executable. Apple Silicon and Intel images are built separately. The launcher and executable target macOS 12 or later, and the app uses ad-hoc signing with the first-open steps above.
 
-The packaged launcher and OptCuts executable target macOS 12 or later. The app
-uses ad-hoc code signing, with the first-open steps described above.
+The `macOS App` workflow builds both architectures and exercises mapping, saved-atlas editing and figure export from the packaged runtime before passing the images to the `Publish` workflow.

@@ -1,20 +1,20 @@
 # Residue-aware OptCuts integration
 
-This directory contains the dependency-free C++ state engine and patch set that add residue-footprint fragmentation energy to the pinned TopoPPI OptCuts build. OptCuts continues to supply symmetric-Dirichlet optimization and topology feasibility.
+This directory contains the dependency-free C++ state engine and patch set that add residue-footprint fragmentation energy to the pinned TopoPPI OptCuts build. OptCuts supplies symmetric Dirichlet energy optimization and topology feasibility checks.
 
 ## How the objective works
 
 The engine fixes residue footprints on the original face-dual graph. Cutting a seam removes an original dual adjacency. A candidate split or merge is evaluated as one transaction, and the engine recomputes only the residues touched by its edges. Transactional evaluation captures the combined effect of multiple cuts through a cyclic footprint.
 
-For an original footprint component with total mass `M` and post-cut piece masses `m_k`, fragmentation is:
+Footprint mass is the integral of the residue indicator over the source surface, in Å². For an original footprint component with total area `M` and post-cut piece areas `m_k`, fragmentation is:
 
 ```text
 1 - sum_k (m_k / M)^2
 ```
 
-Component scores are weighted by their share of the footprint mass. The sidecar then assigns a non-negative objective weight to each residue. TopoPPI uses `1 + contact degree`, where contact degree counts distinct partner residues. ProLIF supplies these partners by default; single-run `--interaction-source geometric` uses the configured heavy-atom contact distance.
+Component scores are weighted by their share of the footprint area. The sidecar then assigns a non-negative objective weight to each residue. TopoPPI uses `1 + contact degree`, where contact degree counts distinct partner residues. ProLIF supplies these partners by default; single-run `--interaction-source geometric` uses the configured heavy-atom contact distance.
 
-The pinned patch maps every OptCuts split or merge path to original edge IDs, adds `alpha * candidateDelta(...)` to the seam-energy change, and commits the selected transaction after the topology operation succeeds. The complete objective and the weight-zero geometry ablation use the same candidate search.
+The pinned patch maps every OptCuts split or merge path to original edge IDs, adds `alpha * candidateDelta(...)` to the seam-energy change, and commits the selected transaction after the topology operation succeeds. The residue-aware objective and the weight-zero geometry ablation use the same candidate search.
 
 ## Sidecar format, version 2
 
@@ -39,7 +39,7 @@ The records have these roles:
 | `FACE` | Integrated piecewise-linear residue mass on one face |
 | `EDGE` | Original source edge, adjacent faces, initial seam state, and continuous residue support |
 
-Every face and internal source edge has one record. Diskification copies share their geometry vertex, while OBJ texture indices carry initial UV seams. The Python audit code uses the same integrated corner-indicator mass stored in each `FACE` record.
+Every face and internal source edge has one record. Diskification copies share their geometry vertex, while OBJ texture indices carry initial UV seams. The Python measurements use the same integrated corner-indicator mass stored in each `FACE` record.
 
 ## Build the executable
 

@@ -6,6 +6,7 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from importlib import metadata
@@ -26,13 +27,14 @@ from topoppi.config import BenchmarkConfig, TopoPPIRunConfig
 from topoppi.errors import ConfigurationError
 from topoppi.file_utils import git_worktree_state, sha256_file
 from topoppi.interactions.interaction_engine import (
+    generate_interactions,
     generate_prolif_interactions,
-    load_prolif_partner_map,
+    load_interaction_document,
+    load_interaction_partner_map,
 )
+from topoppi.interface import prepare_interface
 from topoppi.io.io_loader import PDBLoader
 from topoppi.mesh.parameterization import Parameterizer
-from topoppi.mesh.surface import SurfaceGenerator
-from topoppi.mesh.topology import TopologyManager
 from topoppi.optimization.optcuts import OptCutsUVOptimizer
 from topoppi.visualization.visualizer import InterfaceVisualizer
 
@@ -185,6 +187,7 @@ class WorkflowMixin:
             self.post_to_ui(self.finish_cancelled, str(exc))
         except Exception as e:
             logger.exception("GUI benchmark failed")
+            self.log(traceback.format_exc())
             if self._cancel_event.is_set():
                 self.post_to_ui(self.finish_cancelled, "Benchmark cancellation requested.")
             else:
@@ -210,24 +213,32 @@ class WorkflowMixin:
         source_sha256=None,
         output_dir=None,
         allow_geometric_fallback=False,
+        backend="prolif",
+        chain_data=None,
     ):
-        self.log("Generating ProLIF interaction annotations...")
+        backend_label = "ProLIF" if backend == "prolif" else backend
+        self.log(f"Generating {backend_label} interaction annotations...")
         try:
-            output_json = generate_prolif_interactions(
+            generate = generate_prolif_interactions if backend == "prolif" else generate_interactions
+            options = {} if backend == "prolif" else {"backend": backend}
+            if chain_data is not None:
+                options["chain_data"] = chain_data
+            output_json = generate(
                 pdb_path,
                 chain_a,
                 chain_b,
                 log=_GuiLogAdapter(self.log),
                 source_sha256=source_sha256,
                 output_dir=output_dir,
+                **options,
             )
         except Exception as exc:
             if allow_geometric_fallback:
-                self.log(f"Warning: ProLIF generation failed; using the selected geometric fallback. Details: {exc}")
+                self.log(f"Warning: {backend_label} generation failed; using the selected geometric fallback. Details: {exc}")
                 return None
             raise RuntimeError(
-                "Could not generate ProLIF annotations. Check the selected chains and "
-                "residue completeness, or choose an existing ProLIF JSON on the Advanced page. "
+                f"Could not generate {backend_label} annotations. Check the selected chains and "
+                "residue completeness, or choose an existing interaction JSON on the Advanced page. "
                 f"Details: {exc}"
             ) from exc
         return output_json
@@ -269,13 +280,15 @@ class WorkflowMixin:
             self._check_cancelled()
 
             optimizer = OptCutsUVOptimizer(optcuts_config, cancel_event=self._cancel_event)
+            self.set_stage_progress("Load", 7, "Checking layout engine")
             optcuts_artifact = optimizer.preflight_binary()
+            self.log(f"OptCuts ready: {optcuts_artifact.get('resolved', 'selected executable')}")
             input_sha256 = sha256_file(params["path"])
             explicit_geometric = config.interaction_source == "geometric"
             provided_prolif = params["prolif"] if not explicit_geometric else ""
             prolif_file = provided_prolif
             if not prolif_file and not explicit_geometric:
-                self.log("No ProLIF JSON selected. Generating the required ProLIF annotations automatically.")
+                self.log(f"No interaction JSON selected. Generating {config.interaction_source} annotations automatically.")
                 self.set_stage_progress("Load", 8, "Resolving interactions")
                 prolif_file = self.resolve_prolif_interactions(
                     params["path"],
@@ -284,6 +297,8 @@ class WorkflowMixin:
                     source_sha256=input_sha256,
                     output_dir=params["output_dir"] or os.path.dirname(params["path"]) or os.getcwd(),
                     allow_geometric_fallback=(config.visualization.use_geometric_interaction_fallback),
+                    backend=config.interaction_source,
+                    chain_data=(coords_A, atoms_A, coords_B, atoms_B),
                 )
                 self._check_cancelled()
             prolif_source = (
@@ -297,7 +312,7 @@ class WorkflowMixin:
             )
             t0 = time.perf_counter()
             if prolif_file:
-                interaction_partners = load_prolif_partner_map(
+                interaction_partners = load_interaction_partner_map(
                     prolif_file,
                     atoms_A,
                     atoms_B,
@@ -305,14 +320,16 @@ class WorkflowMixin:
                     expected_chain_b=params["chain_b"],
                     expected_source_sha256=input_sha256,
                 )
-                interaction_source = "prolif"
+                payload, _, _ = load_interaction_document(prolif_file)
+                interaction_source = str(payload.get("engine") or config.interaction_source)
                 if not interaction_partners:
                     raise ValueError(
-                        "ProLIF did not yield any Chain-A/Chain-B interaction "
+                        "The interaction document did not yield any Chain-A/Chain-B interaction "
                         "residue pairs that resolve against the selected structure."
                     )
                 self.log(
-                    "ProLIF interactions: {} Chain-A residues and {} residue pairs.".format(
+                    "{} interactions: {} Chain-A residues and {} residue pairs.".format(
+                        interaction_source,
                         len(interaction_partners),
                         sum(len(values) for values in interaction_partners.values()),
                     )
@@ -340,10 +357,10 @@ class WorkflowMixin:
             self.log("Generating molecular surface...")
             self.set_stage_progress("Surface", 25, "Generating molecular surface")
             t0 = time.perf_counter()
-            surf_gen = SurfaceGenerator(coords_A, config=surface_config)
-            mesh_A = surf_gen.generate_mesh()
-            if mesh_A is None:
-                raise ValueError(f"Surface generation failed: {surf_gen.last_report}")
+            prepared_interface = prepare_interface(params["path"], params["chain_a"], params["chain_b"],
+                surface=surface_config, topology=topology_config, sides=(0,),
+                chain_data=(coords_A, atoms_A, coords_B, atoms_B), cancel_event=self._cancel_event)
+            prepared_side = prepared_interface.partners[0]
             stage_timings["surface_sec"] = time.perf_counter() - t0
             self.set_stage_progress("Surface", 40, "Surface ready")
             self._check_cancelled()
@@ -380,8 +397,7 @@ class WorkflowMixin:
             )
             viz.interaction_residue_source = interaction_source
 
-            topo = TopologyManager(mesh_A, coords_B, config=topology_config)
-            patches = topo.get_interface_patches()
+            patches = prepared_side.layout_patches()
             if not patches:
                 raise ValueError(f"No interface found with cutoff {params['cutoff']:.2f}.")
             stage_timings["patch_extraction_sec"] = time.perf_counter() - t0
@@ -450,16 +466,17 @@ class WorkflowMixin:
                 "optcuts_resolved": optcuts_artifact,
                 "config": config.to_dict(),
                 "surface": asdict(surface_config),
-                "surface_generation": dict(surf_gen.last_report),
+                "surface_generation": prepared_side.surface_report,
+                "interface": prepared_interface.metadata(),
                 "topology": asdict(topology_config),
-                "topology_extraction": dict(topo.last_report),
+                "topology_extraction": prepared_side.topology_report,
                 "parameterization": asdict(parameterization_config),
                 "optcuts": asdict(optcuts_config),
                 "interaction_summary": {
                     "source": interaction_source,
                     "definition": (
-                        "Chain A/B residue pairs present in ProLIF interaction records"
-                        if interaction_source == "prolif"
+                        f"Chain A/B residue pairs present in {interaction_source} interaction records"
+                        if interaction_source not in {"geometric", "geometric_fallback"}
                         else (
                             "Chain A/B heavy-atom residue pair distance <= "
                             f"{float(params['contact_distance_angstrom']):g} Angstrom "
@@ -491,11 +508,13 @@ class WorkflowMixin:
                 manifest,
                 params,
                 optimized_patches,
+                prepared_interface=prepared_interface,
             )
         except PipelineCancelled as exc:
             self.post_to_ui(self.finish_cancelled, self._previous_result_message(str(exc)))
         except Exception as e:
             logger.exception("GUI single-run pipeline failed")
+            self.log(traceback.format_exc())
             if self._cancel_event.is_set():
                 self.post_to_ui(
                     self.finish_cancelled,
@@ -524,7 +543,7 @@ class WorkflowMixin:
             return f"{message}\n\nThe canvas still shows the previous successful result."
         return message
 
-    def accept_pipeline_result(self, viz, patches, manifest, params, all_patches=None):
+    def accept_pipeline_result(self, viz, patches, manifest, params, all_patches=None, *, prepared_interface=None):
         self._pending_single_run = {
             "viz": viz,
             "patches": list(patches),
@@ -532,6 +551,7 @@ class WorkflowMixin:
             "manifest": dict(manifest),
             "params": dict(params),
             "style": dict(self._run_style or {}),
+            "geometry": prepared_interface,
         }
         if self._run_style is not None:
             self._restore_atlas_style(self._run_style)
@@ -574,8 +594,8 @@ class WorkflowMixin:
         self._check_cancelled()
         report = optimizer.get_last_report()
         weight_definition = (
-            "distinct Chain-B residues paired with each Chain-A residue in ProLIF records"
-            if interaction_source == "prolif"
+            f"distinct Chain-B residues paired with each Chain-A residue in {interaction_source} records"
+            if interaction_source not in {"geometric", "geometric_fallback"}
             else (
                 "distinct Chain-B residues with any heavy-atom pair at distance <= "
                 f"{float(contact_distance_angstrom):g} Angstrom "

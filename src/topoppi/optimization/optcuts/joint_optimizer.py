@@ -7,9 +7,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
@@ -30,6 +32,8 @@ from topoppi.install_optcuts import (
     LINUX_X86_64_SHA256,
     OPTCUTS_AUDITED_UPSTREAM_COMMIT,
     OPTCUTS_UPSTREAM_URL,
+    InstallError,
+    default_install_dir,
 )
 from topoppi.mesh.provenance import OPTCUTS_GEOMETRY_VERTEX_IDS
 
@@ -46,18 +50,38 @@ class ParsedOBJUV:
     corner_uv: np.ndarray
 
 
-def resolve_optcuts_binary(config: OptCutsConfig) -> Optional[str]:
-    """Resolve the executable path for OptCuts from env/config/PATH."""
+def _requested_optcuts_binary(config: OptCutsConfig) -> str:
+    configured = str(config.optcuts_bin)
+    if configured not in {"OptCuts_bin", "OptCuts_bin.exe"}:
+        return configured
+    return os.environ.get(config.optcuts_env_var) or configured
 
-    bin_path = os.environ.get(config.optcuts_env_var, config.optcuts_bin)
-    if os.path.isabs(bin_path):
-        resolved_bin = bin_path
-    else:
-        local_bin = os.path.abspath(bin_path)
-        resolved_bin = local_bin if os.path.isfile(local_bin) else shutil.which(bin_path)
-    if not resolved_bin or not os.path.isfile(resolved_bin):
-        return None
-    return os.path.abspath(resolved_bin)
+
+def resolve_optcuts_binary(config: OptCutsConfig) -> Optional[str]:
+    """Resolve an explicit executable, or discover a compatible installation/build."""
+
+    requested = _requested_optcuts_binary(config)
+    bin_path = os.path.expanduser(requested)
+    local_bin = os.path.abspath(bin_path)
+    resolved_bin = local_bin if os.path.isfile(local_bin) else shutil.which(bin_path)
+    # An explicit selection must be corrected by the user, not silently replaced.
+    if os.environ.get(config.optcuts_env_var) or requested not in {"OptCuts_bin", "OptCuts_bin.exe"}:
+        return os.path.abspath(resolved_bin) if resolved_bin and os.path.isfile(resolved_bin) else None
+    filename = "OptCuts_bin.exe" if os.name == "nt" else "OptCuts_bin"
+    candidates = [Path(resolved_bin)] if resolved_bin else []
+    candidates.append(Path(sys.executable).resolve().parent / filename)
+    try:
+        candidates.append(default_install_dir() / filename)
+    except InstallError:
+        pass  # A local source build can still be available on other platforms.
+    for start in (Path(__file__).resolve().parent, Path.cwd()):
+        candidates.extend(parent / "tools" / "OptCuts" / filename for parent in (start, *start.parents))
+    available = list(dict.fromkeys(str(candidate.resolve()) for candidate in candidates if candidate.is_file()))
+    if config.residue_fragmentation_weight > 0.0:
+        for binary in available:
+            if supports_residue_footprint_energy(binary):
+                return binary
+    return available[0] if available else None
 
 
 def supports_residue_footprint_energy(binary_path: str) -> bool:
@@ -85,7 +109,7 @@ class OptCutsUVOptimizer:
 
         resolved, digest = self._resolved_binary()
         return {
-            "requested": os.environ.get(self.config.optcuts_env_var, self.config.optcuts_bin),
+            "requested": _requested_optcuts_binary(self.config),
             "resolved": resolved,
             "sha256": digest,
             "env_var": self.config.optcuts_env_var,
@@ -520,22 +544,24 @@ class OptCutsUVOptimizer:
     def _resolved_binary(self) -> tuple[str, str]:
         if self._binary is not None:
             return self._binary
-        requested = os.environ.get(self.config.optcuts_env_var, self.config.optcuts_bin)
+        requested = _requested_optcuts_binary(self.config)
         resolved = resolve_optcuts_binary(self.config)
         if not resolved:
             raise RuntimeError(
                 f"OptCuts binary not found: {requested}. Run 'topoppi-install-optcuts', "
-                f"or set {self.config.optcuts_env_var} to a native OptCuts executable."
+                f"select a native OptCuts executable in Advanced options, or set {self.config.optcuts_env_var}."
             )
+        if os.name != "nt" and not os.access(resolved, os.X_OK):
+            raise RuntimeError(f"OptCuts is not executable: {resolved}. Enable executable permission or select another binary in Advanced options.")
         digest = sha256_file(resolved)
         expected = self.config.expected_binary_sha256.strip().lower()
         if expected and digest.lower() != expected:
             raise RuntimeError(f"OptCuts binary checksum mismatch: expected {expected}, got {digest}.")
         if self.config.residue_fragmentation_weight > 0.0 and not supports_residue_footprint_energy(resolved):
             raise RuntimeError(
-                "The selected OptCuts binary does not expose residue-footprint energy support. "
-                "Build the residue-aware binary from tools/OptCuts before enabling "
-                "residue_fragmentation_weight."
+                f"The selected OptCuts binary ({resolved}) does not support residue-aware layouts. "
+                "Select a TopoPPI residue-aware OptCuts build in Advanced options, or build it from tools/OptCuts. "
+                "For a geometry-only layout, set the residue fragmentation weight to 0."
             )
         self._binary = (resolved, digest)
         return self._binary

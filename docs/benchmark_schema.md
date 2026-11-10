@@ -1,19 +1,14 @@
 # TopoPPI benchmark evidence schema (v2.0)
 
-_A guide to the benchmark reports and evidence artifacts written by TopoPPI 2.1._
-
----
-
 ## Start here
 
 Each benchmark writes one evidence bundle under `BenchmarkConfig.output_root`.
 The bundle contains a human-readable summary, machine-readable details, row-level
 audit records, resume state, and file checksums.
 
-This guide covers the TopoPPI `2.1` working-tree version. Within
-`benchmark_report.json`, `topoppi_version` identifies the application and
-`schema_version` identifies the serialized layout. Their current values are
-`2.1` and `2.0`, respectively; each is versioned independently for readers and analysis scripts.
+Within `benchmark_report.json`, `topoppi_version` identifies the application
+version used for that run, while `schema_version` identifies the serialized
+layout described here (`2.0`). The two versions are independent.
 
 All JSON files use strict JSON syntax. Undefined and non-finite scientific
 values are serialized as `null`, which allows standard JSON parsers to read the
@@ -27,7 +22,7 @@ files directly.
 | Which structures succeeded or failed? | `benchmark_summary.csv` |
 | Which inputs and chain pairs entered the run? | `benchmark_manifest.csv` |
 | Where did a structure or method fail? | `benchmark_failures.csv` |
-| How much geometry and biology survived preparation? | `benchmark_per_patch.csv` |
+| Which geometric features and biological annotations were retained during preparation? | `benchmark_per_patch.csv` |
 | How did individual residue footprints behave? | `benchmark_per_residue.csv.gz` |
 | Which source elements produced the final mesh? | `benchmark_provenance.csv.gz` |
 | Which OptCuts command and binary produced a patch? | `benchmark_optcuts_executions.jsonl.gz` |
@@ -62,9 +57,8 @@ profile is recorded in `config.execution_profile` and in each structure row.
 | `operational_optcuts` | One automatic OptCuts arm | End-to-end runtime and usable-output rate |
 
 The comparative parameterizations are `lscm`, `harmonic`, `slim`, `spherical`,
-and `cylindrical`. Available OptCuts arms are `optcuts_automatic`,
-`optcuts_lscm_initialized`, and the complete TopoPPI arm identified internally
-as `residue_aware_optcuts`.
+and `cylindrical`. Available OptCuts configurations are `optcuts_automatic`,
+`optcuts_lscm_initialized`, and residue-aware optimization, `residue_aware_optcuts`.
 
 ### Structure status terms
 
@@ -75,7 +69,7 @@ as `residue_aware_optcuts`.
 | Complete comparison | Every configured method returned finite metrics on the exact common source faces |
 | Complete TopoPPI pair | Geometry-only OptCuts and TopoPPI returned an exact finite pair on the matched domain |
 | Failed | A preprocessing, structure, topology, solver, timeout, or resource error was recorded |
-| Right censored | Runtime reached a method budget, worker timeout, or memory limit before a usable completion |
+| Right-censored | Runtime reached a method budget, worker timeout, or memory limit before a usable completion |
 
 Failures remain in attempted-structure counts and failure-rate summaries.
 Complete-case quality summaries use the relevant exact comparison domain.
@@ -99,7 +93,7 @@ Three paired analyses have their own domain records:
 - `residue_aware_comparison_domain` for geometry-only OptCuts and TopoPPI.
 
 The topology-preparation ablation has a separate paired record. Its results stay
-outside the standard same-domain method comparison.
+separate from the standard comparison on shared source faces.
 
 ## `benchmark_report.json`
 
@@ -108,7 +102,7 @@ outside the standard same-domain method comparison.
 | Field | Contents |
 | --- | --- |
 | `schema_version` | Machine-readable report layout, currently `2.0` |
-| `topoppi_version` | TopoPPI application version, currently `2.1` |
+| `topoppi_version` | Application version that produced the report |
 | `created_at` | UTC creation time |
 | `config` | Complete serialized `BenchmarkConfig` |
 | `runtime` | Execution model, environment, Git state, resources, hashes, and time budgets |
@@ -129,7 +123,7 @@ Each item in `files` brings together the evidence needed to interpret one input:
 | Method execution | Status, time, hashes, initialization, diagnostics, and quality for each configured method |
 | Pair quality | Exact geometry-only/TopoPPI, initialization, and topology-ablation domains |
 | Retention | Patch-level geometry, residue, contact, hotspot, interaction, and confidence retention |
-| Resources | Stage wall time, CPU time, repeated measurements, and process-tree peak RSS |
+| Resources | Stage wall time, CPU time, repeated measurements, and peak resident set size (RSS) across the process tree |
 | Artifact references | Per-face, per-residue, provenance, and OptCuts-execution evidence files |
 
 Method failures include a stage and reason. Successful methods include their
@@ -159,8 +153,8 @@ and inferential diagnostics.
 
 ### `benchmark_summary.csv`
 
-This file provides one row for every attempted structure. It is the quickest
-place to join benchmark outcomes with dataset metadata.
+This file provides one row per attempted structure for joining benchmark
+outcomes with dataset metadata.
 
 Generic method columns include the source domain and signature used for each
 value. The exact geometry-only/TopoPPI comparison uses the
@@ -218,7 +212,7 @@ domain. Fields cover:
 - footprint mass and fragmentation;
 - seam crossings and nonseparating seam crossings;
 - interaction and objective weights;
-- exact-pair and independent-arm provenance.
+- exact-pair and per-method provenance.
 
 ### `benchmark_provenance.csv.gz`
 
@@ -281,7 +275,7 @@ extreme distortion, and residue fragmentation have dedicated fields.
 ### OptCuts feasibility certificate
 
 For every returned OptCuts patch, TopoPPI recomputes the raw-scale native
-symmetric-Dirichlet constraint:
+symmetric Dirichlet constraint:
 
 ```text
 area-weighted mean of ||J||_F^2 + ||J^-1||_F^2
@@ -309,12 +303,13 @@ partitioned into a different number of charts.
 ### Residue-footprint fragmentation
 
 Residue footprints are defined on the original face-dual graph. A residue
-receives mass `face_area * labelled_corner_count / 3` on each face. Two incident
+receives surface-area weight `face_area * labelled_corner_count / 3` on each
+face. This weight has units of Å² and is stored as footprint mass. Two incident
 faces are adjacent for that residue when their shared edge has a labelled
 endpoint.
 
 Original connected components provide the zero-fragmentation baseline. For one
-component with total mass `M` and seam-induced pieces of mass `m_k`, the score
+component with total surface area `M` and seam-induced piece areas `m_k`, the score
 is:
 
 ```text
@@ -328,15 +323,15 @@ and nonseparating seam crossings.
 The interaction weight equals the number of distinct partner residues paired
 with each mapped residue in the bound ProLIF record. Formal runs require
 `prolif_file`, `prolif_sha256`, chain bindings, and a source-structure digest for
-every included structure. A non-formal run without declared interaction
-evidence records `geometric_fallback` and derives partner degrees from
-heavy-atom pairs inside `contact_distance_angstrom`. TopoPPI assigns objective
-weight `1 + interaction weight`. The matched geometry-only arm is
-`optcuts_automatic`; the complete TopoPPI arm is serialized as
-`residue_aware_optcuts`. Both arms use the same automatic initialization and
+every included structure. For runs outside formal mode, missing interaction
+records activate `geometric_fallback`, which derives partner degrees from heavy-atom pairs within
+`contact_distance_angstrom`. TopoPPI assigns objective weight
+`1 + interaction weight`. The matched geometry-only configuration is
+`optcuts_automatic`; residue-aware optimization is serialized as
+`residue_aware_optcuts`. Both use the same automatic initialization and
 candidate-search policy.
 
-`tools/publication/prepare_manifest_prolif.py` generates these records in bulk and writes the two manifest fields. Relative `prolif_file` paths are resolved from the manifest directory.
+Provide interaction records for each input through the manifest fields. Relative `prolif_file` paths are resolved from the manifest directory.
 
 ### Atlas packing
 
@@ -373,7 +368,7 @@ totals. Rejected components remain represented in all-attempted retention.
 | `resolution_angstrom` | One official scalar `resolution_combined` value from the experimental record |
 | `confidence_metric` | Residue-level confidence metric for predicted coordinates |
 | `confidence_source` | Coordinate field or source that supplied confidence |
-| `confidence_threshold` | Frozen inclusion threshold, when configured |
+| `confidence_threshold` | Fixed inclusion threshold, when configured |
 | `confidence_stratum` | Mean-pLDDT group: `[0,70)`, `[70,90)`, or `[90,100]` |
 | `afdb_ipsae` | AFDB complex-level ipSAE value |
 | `afdb_ipsae_stratum` | ipSAE group: `[0,0.50)`, `[0.50,0.70)`, or `[0.70,1]` |
@@ -391,22 +386,28 @@ Complex-level ipTM, ipSAE, pDockQ, and LIS fields are populated for actual AFDB
 complex coordinates. Independently aligned AFDB monomer replacements and their
 experimental references leave these complex-level fields empty.
 
-### Sequence mapping and fixed-pose replacements
+### Sequence mapping and paired-coordinate metadata
 
-When a chain-specific SIFTS interval is unavailable, sequence-based mapping uses
-at least `0.90` selected-pair consensus across every optimal correspondence.
-Ambiguous repeat positions are recorded as mapping attrition.
+Paired benchmarks read the supplied coordinates and mapping metadata. Prepare
+sequence correspondences and any fixed-pose monomer replacements before the
+benchmark, and retain the alignment, rigid-fit and selection criteria with the
+input preparation records.
 
-Fixed-pose monomer replacement requires:
+`topoppi.sequence_alignment.align_protein_sequences` returns a deterministic
+sequence correspondence, sequence identity, coverage and ambiguity statistics.
+`selected_pair_consensus_fraction` is the fraction of selected residue pairs
+shared by all optimal correspondences. `optimal_correspondence_count` counts
+distinct optimal residue mappings.
 
-- at least ten sequence-matched C-alpha atoms;
-- sequence identity of at least `0.70`;
-- non-collinear matched coordinates for a unique rigid fit.
+For paired formal inputs, the manifest records these statistics separately for
+both partners in `paired_alignment_a_*` and `paired_alignment_b_*`. Validation
+requires a positive correspondence count and a finite consensus fraction in
+`[0,1]`. Contact and interface-residue mapping coverage fields describe the
+portion of the experimental interface represented by the supplied mapping.
 
-Whole-chain alignment coverage is recorded as a descriptor. Mapping-completeness
-and paired-geometry strata capture partial AFDB domain availability. High and
-moderate paired-geometry strata also require selected-pair consensus of at
-least `0.90` across every optimal sequence correspondence.
+`paired_geometry_stratum` records the supplied classification:
+`high_fidelity`, `moderate_fidelity`, or `geometry_stress_test`. The benchmark
+validates the declared fields and carries them into the comparison report.
 
 ## Statistical summaries
 
@@ -458,9 +459,8 @@ Within `summary.residue_aware_optcuts_comparisons`:
   `automatic_normalized_seam_length` form the supporting trade-off family;
 - `automatic_unusable_output` supplies the paired reliability endpoint.
 
-The primary endpoint has one prespecified comparison and receives no
-multiplicity adjustment. Supporting comparisons receive Benjamini-Hochberg
-adjustment as one family. Standard-method quality, symmetric-Dirichlet,
+The primary endpoint uses a single prespecified, unadjusted comparison. Supporting comparisons receive Benjamini-Hochberg
+adjustment as one family. Standard-method quality, symmetric Dirichlet,
 unusable-output, jointly-injective, initialization, and topology-ablation
 comparisons retain their own declared families.
 

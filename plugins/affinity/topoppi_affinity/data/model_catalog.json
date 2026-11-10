@@ -1,0 +1,83 @@
+{
+  "release": "3.0.0",
+  "models": {
+    "absolute": {
+      "name": "Absolute binding affinity",
+      "target": "pkd",
+      "scope": "Binding affinity from 477 physicochemical descriptors; bundled CPU model",
+      "url": null,
+      "bundled": "production/absolute/model.json"
+    },
+    "known": {
+      "name": "Mutation effect: known systems",
+      "target": "ddg",
+      "scope": "Mutation-effect ensemble for systems represented in the recorded training set",
+      "url": null
+    },
+    "unseen": {
+      "name": "Mutation effect: unseen systems",
+      "target": "ddg",
+      "scope": "Mutation-effect ensemble for transfer to systems outside the recorded training set",
+      "url": null
+    },
+    "mutation": {
+      "name": "Mutation effects",
+      "target": "ddg",
+      "scope": "Single and joint substitutions on a fixed WT complex; bundled CPU model",
+      "url": null,
+      "bundled": "production/mutation/model.json"
+    }
+  },
+  "esmc": {
+    "name": "ESMC-600M (2024-12)",
+    "repository": "biohub/esmc-600m-2024-12",
+    "revision": "e4d83bc7e10fd55c92e598e545f4a76bf04a6e5c",
+    "url": "https://huggingface.co/biohub/esmc-600m-2024-12/resolve/e4d83bc7e10fd55c92e598e545f4a76bf04a6e5c/data/weights/esmc_600m_2024_12_v0.pth",
+    "size_bytes": 2300275866,
+    "license": "MIT",
+    "source_url": "https://github.com/biohub/esm"
+  },
+  "priors": {
+    "known": {
+      "name": "StaB-ddG stability-only prior",
+      "directory": "stab-ddg-b19a5d72637a",
+      "commit": "b19a5d72637a6b581b16f38af39383658e5ae1a5",
+      "url": "https://codeload.github.com/LDeng0205/StaB-ddG/zip/b19a5d72637a6b581b16f38af39383658e5ae1a5",
+      "source_url": "https://github.com/LDeng0205/StaB-ddG",
+      "license": "MIT",
+      "required_files": [
+        "stabddg/model.py",
+        "stabddg/ppi_dataset.py",
+        "model_ckpts/stability_finetuned.pt",
+        "data/SKEMPI/train_pdb.pkl"
+      ]
+    },
+    "unseen": {
+      "name": "BA-Cycle prior",
+      "directory": "ba-ddg-dd677025c0fd",
+      "commit": "dd677025c0fd504c69e094118633ea2a88359067",
+      "url": "https://codeload.github.com/aim-uofa/BA-DDG/zip/dd677025c0fd504c69e094118633ea2a88359067",
+      "source_url": "https://github.com/aim-uofa/BA-DDG",
+      "license": "Author README: BSD-2-Clause for non-commercial academic use; contact the author for commercial use",
+      "required_files": [
+        "training/protein_mpnn_utils.py",
+        "training/common_utils/transforms/__init__.py",
+        "soluble_model_weights/v_48_020.pt"
+      ],
+      "checkpoint": "soluble_model_weights/v_48_020.pt",
+      "downloads": [
+        {
+          "name": "ProteinMPNN soluble v_48_020",
+          "path": "soluble_model_weights/v_48_020.pt",
+          "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/soluble_model_weights/v_48_020.pt",
+          "size_bytes": 6681301
+        },
+        {
+          "name": "ProteinMPNN license",
+          "path": "soluble_model_weights/LICENSE",
+          "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/LICENSE"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,147 @@
+name: Affinity plugin
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+    inputs:
+      release_artifacts:
+        type: boolean
+        default: false
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plugin-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-file: environment.yml
+          environment-name: topoppi-affinity-tests
+          cache-environment: true
+      - name: Install core and the default prediction models
+        shell: bash -el {0}
+        run: pip install -e . -e './plugins/affinity[dev]'
+      - name: Install optional neural dependencies for numerical tests
+        shell: bash -el {0}
+        run: |
+          python -m pip install 'torch>=2.2' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'torch-geometric>=2.5'
+      - name: Install virtual display
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth
+      - name: Test plugin without downloading model weights
+        shell: bash -el {0}
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: xvfb-run -a python -m pytest plugins/affinity/tests
+      - name: Build plugin distributions
+        shell: bash -el {0}
+        run: |
+          python -m build plugins/affinity
+          python -m topoppi_affinity --help
+          python - <<'PY'
+          import pathlib, tarfile, zipfile
+          folder = pathlib.Path('plugins/affinity/dist')
+          for path in folder.iterdir():
+              if path.suffix == '.whl':
+                  with zipfile.ZipFile(path) as archive:
+                      names = archive.namelist()
+                  assert any(n.startswith('topoppi_affinity/') for n in names)
+                  assert any(n.startswith('topoppi_affinity_tools/') for n in names)
+                  assert not any(n.startswith('topoppi/') for n in names)
+              else:
+                  with tarfile.open(path) as archive:
+                      names = archive.getnames()
+              assert not any('/.internal/' in n or n.endswith('.joblib') for n in names)
+          PY
+      - name: Collect plugin release distributions
+        if: inputs.release_artifacts
+        shell: bash -el {0}
+        run: |
+          mkdir release-affinity
+          cp plugins/affinity/dist/*.whl plugins/affinity/dist/*.tar.gz release-affinity/
+      - uses: actions/upload-artifact@v7
+        if: inputs.release_artifacts
+        with:
+          name: release-affinity
+          path: release-affinity/
+          if-no-files-found: error
+
+  installed-plugin:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-file: environment.yml
+          environment-name: topoppi-binding-wheel
+          cache-environment: true
+      - name: Build Core and both plugin distributions
+        shell: bash -el {0}
+        run: |
+          python -m build --wheel
+          python -m build --wheel plugins/affinity
+          python -m build --wheel plugins/hotspot
+      - name: Install core wheel and check optional boundary
+        shell: bash -el {0}
+        run: |
+          pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          python -c "import importlib.util; assert importlib.util.find_spec('topoppi_affinity') is None; assert importlib.util.find_spec('topoppi_hotspot') is None; assert importlib.util.find_spec('torch') is None"
+          python -m topoppi.cli plugins list
+      - name: Install both plugin wheels with their bundled CPU models
+        shell: bash -el {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          wheels = [next(Path('plugins', plugin, 'dist').glob('*.whl')).resolve()
+                    for plugin in ('affinity', 'hotspot')]
+          subprocess.check_call([sys.executable, '-m', 'pip', 'install', *map(str, wheels)])
+          PY
+      - name: Prepare Linux OptCuts for installed-model checks
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/binding-optcuts"
+          install -m 755 tools/OptCuts/OptCuts_bin "$RUNNER_TEMP/binding-optcuts/OptCuts_bin"
+          echo "TOPOPPI_OPTCUTS_BIN=$RUNNER_TEMP/binding-optcuts/OptCuts_bin" >> "$GITHUB_ENV"
+      - name: Build macOS OptCuts for installed-model checks
+        if: runner.os == 'macOS'
+        shell: bash -el {0}
+        run: |
+          micromamba create -y -p "$RUNNER_TEMP/topoppi-binding-build" "cmake<4"
+          export PATH="$RUNNER_TEMP/topoppi-binding-build/bin:$PATH"
+          bash tools/OptCuts/build_residue_aware_optcuts.sh "$RUNNER_TEMP/binding-optcuts/OptCuts_bin"
+          echo "TOPOPPI_OPTCUTS_BIN=$RUNNER_TEMP/binding-optcuts/OptCuts_bin" >> "$GITHUB_ENV"
+      - name: Build Windows OptCuts for installed-model checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\tools\OptCuts\build_windows_optcuts.ps1 -OutputDir "release-binding-optcuts"
+          $binary = (Resolve-Path "release-binding-optcuts\OptCuts_bin-windows-x86_64.exe").Path
+          "TOPOPPI_OPTCUTS_BIN=$binary" >> $env:GITHUB_ENV
+      - name: Install virtual display
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth
+      - name: Exercise installed packages outside the checkout without downloading weights
+        shell: bash -el {0}
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: |
+          cp installer/smoke_affinity.py installer/smoke_binding.py "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"
+          python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a python smoke_binding.py --require-gui
+          else
+            python smoke_binding.py --require-gui
+          fi

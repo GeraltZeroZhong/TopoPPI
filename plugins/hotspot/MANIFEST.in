@@ -1,0 +1,8 @@
+include README.md pyproject.toml LICENSE
+recursive-include topoppi_hotspot *.py
+recursive-include examples *.py
+recursive-include tests *.py *.pdb *.md
+prune build
+prune .internal
+
+recursive-include topoppi_hotspot/data *.json *.npz *.md

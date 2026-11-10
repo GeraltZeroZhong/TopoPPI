@@ -324,7 +324,7 @@ class TopoPPIRunConfig:
     topology: TopologyConfig = field(default_factory=TopologyConfig)
     parameterization: ParameterizationConfig = field(default_factory=ParameterizationConfig)
     optcuts: OptCutsConfig = field(
-        default_factory=lambda: OptCutsConfig(residue_fragmentation_weight=DEFAULT_RESIDUE_FRAGMENTATION_WEIGHT)
+        default_factory=lambda: OptCutsConfig(residue_fragmentation_weight=DEFAULT_RESIDUE_FRAGMENTATION_WEIGHT).for_headless()
     )
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
 
@@ -340,20 +340,23 @@ class TopoPPIRunConfig:
             raise ConfigurationError("Choose the partner chain (Chain B).")
         if str(self.chain_a).strip() == str(self.chain_b).strip():
             raise ConfigurationError("Choose two different chains for Chain A and Chain B.")
-        if self.interaction_source not in {"prolif", "geometric"}:
-            raise ConfigurationError("interaction_source must be 'prolif' or 'geometric'.")
+        if not isinstance(self.interaction_source, str) or not self.interaction_source.strip():
+            raise ConfigurationError("Choose an interaction backend or 'geometric'.")
         if self.interaction_source == "geometric" and self.prolif_file:
-            raise ConfigurationError("Choose geometric interactions or a ProLIF file; remove the other setting.")
+            raise ConfigurationError("Choose geometric interactions or an interaction file; remove the other setting.")
         if self.prolif_file and not Path(self.prolif_file).is_file():
-            raise ConfigurationError(f"ProLIF JSON was not found: {self.prolif_file}")
+            raise ConfigurationError(f"Interaction JSON was not found: {self.prolif_file}")
         if not str(self.output_file).strip():
             raise ConfigurationError("Choose an output image path.")
         if Path(self.output_file).expanduser().resolve() == input_path.expanduser().resolve():
             raise ConfigurationError("The output image path matches the input structure path.")
         if self.atlas_output:
             atlas_path = Path(self.atlas_output).expanduser().resolve()
-            if atlas_path in {input_path.expanduser().resolve(), Path(self.output_file).expanduser().resolve()}:
-                raise ConfigurationError("Choose an atlas output path separate from the input structure and output image.")
+            other_paths = [self.pdb_file, self.output_file, Path(self.output_file).with_suffix(".topoppi.json"),
+                           self.prolif_file, self.visualization.annotation_file]
+            if atlas_path in {Path(path).expanduser().resolve() for path in other_paths if path}:
+                raise ConfigurationError("Choose an atlas output path separate from the input files, output image "
+                                         "and run report.")
         _require_positive("contact_distance_angstrom", self.contact_distance_angstrom)
         self.surface.validate()
         self.topology.validate()
@@ -602,7 +605,9 @@ def benchmark_config_from_dict(payload: Dict[str, object]) -> BenchmarkConfig:
     data["surface"] = SurfaceConfig(**dict(data.get("surface", {})))
     data["topology"] = TopologyConfig(**dict(data.get("topology", {})))
     data["parameterization"] = ParameterizationConfig(**dict(data.get("parameterization", {})))
-    data["optcuts"] = OptCutsConfig(**dict(data.get("optcuts", {})))
+    optcuts = dict(data.get("optcuts", {}))
+    optcuts.setdefault("optcuts_mode", optcuts.get("optcuts_headless_mode", OptCutsConfig().optcuts_headless_mode))
+    data["optcuts"] = OptCutsConfig(**optcuts)
     if data.get("optcuts_variants") is not None:
         raw_variants = data["optcuts_variants"]
         if isinstance(raw_variants, (str, bytes)) or not isinstance(raw_variants, (list, tuple)):

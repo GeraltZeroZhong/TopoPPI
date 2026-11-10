@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           $installer = (Resolve-Path "${{ steps.artifact.outputs.installer }}").Path
-          $installDir = Join-Path $env:RUNNER_TEMP "TopoPPI 用户"
+          $installDir = Join-Path $env:RUNNER_TEMP ("TopoPPI " + [char]0x7528 + [char]0x6237)
           $installLog = Join-Path $env:RUNNER_TEMP "TopoPPI Installer.log"
           New-Item -ItemType Directory -Force -Path $installDir | Out-Null
           Set-Content -Path (Join-Path $installDir "TopoPPI GUI.cmd") -Value "legacy launcher"
@@ -129,6 +129,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "The installed Python environment could not import the application stack."
           }
+          & $python -I tests\core_install_smoke.py
+          if ($LASTEXITCODE -ne 0) {
+            throw "The default Chemistry plugin failed its installed capability smoke."
+          }
 
           & $cli --version
           if ($LASTEXITCODE -ne 0) {
@@ -148,12 +152,12 @@ jobs:
 
           $guiSmoke = @'
           import tkinter as tk
-          from topoppi.gui_app import ProtSurfApp
+          from topoppi.gui_app import InterfaceApp
 
           root = tk.Tk()
           root.withdraw()
           try:
-              ProtSurfApp(root)
+              InterfaceApp(root)
               root.update_idletasks()
           finally:
               root.destroy()
@@ -210,7 +214,7 @@ jobs:
           name: windows-installation-logs
           path: |
             ${{ runner.temp }}/TopoPPI Installer.log
-            ${{ runner.temp }}/TopoPPI 用户/installation.log
+            ${{ runner.temp }}/TopoPPI */installation.log
           if-no-files-found: ignore
           retention-days: 14
 

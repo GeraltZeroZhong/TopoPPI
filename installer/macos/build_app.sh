@@ -73,7 +73,9 @@ packed_environment="$build_root/environment"
 conda-pack \
     -p "$environment_prefix" \
     -o "$raw_environment" \
-    --exclude 'lib/python*/site-packages/topoppi-*.dist-info/direct_url.json'
+    --exclude 'lib/python*/site-packages/topoppi-*.dist-info/direct_url.json' \
+    --exclude 'lib/python*/site-packages/topoppi_affinity-*.dist-info/direct_url.json' \
+    --exclude 'lib/python*/site-packages/topoppi_hotspot-*.dist-info/direct_url.json'
 mkdir -p "$packed_environment"
 tar -xzf "$raw_environment" -C "$packed_environment"
 find "$packed_environment" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
@@ -85,7 +87,13 @@ while IFS= read -r -d '' path; do
     own_runtime_paths+=("$path")
 done < <(
     find "$packed_environment" -type d \
-        \( -path '*/site-packages/topoppi' -o -path '*/site-packages/topoppi-*.dist-info' \) \
+        \( -path '*/site-packages/topoppi' -o -path '*/site-packages/topoppi_chemistry' \
+           -o -path '*/site-packages/topoppi_representation' \
+           -o -path '*/site-packages/topoppi_affinity' -o -path '*/site-packages/topoppi_affinity_tools' \
+           -o -path '*/site-packages/topoppi_hotspot' \
+           -o -path '*/site-packages/topoppi-*.dist-info' \
+           -o -path '*/site-packages/topoppi_affinity-*.dist-info' \
+           -o -path '*/site-packages/topoppi_hotspot-*.dist-info' \) \
         -print0
 )
 private_paths="$({

@@ -21,5 +21,6 @@
     "optcuts_bin": "../tools/OptCuts/OptCuts_bin",
     "residue_fragmentation_weight": 20.0,
     "timeout_sec": 120.0
-  }
+  },
+  "min_chain_residues": 1
 }

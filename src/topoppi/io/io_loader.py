@@ -14,8 +14,14 @@ class PDBLoader:
         else:
             self.parser = PDBParser(QUIET=True)
 
-        self.structure = self.parser.get_structure("P", file_path)
-        self.model = self.structure[0]  # Always take first model
+        try:
+            self.structure = self.parser.get_structure("P", file_path)
+        except KeyError as exc:
+            raise ValueError(f"Structure is missing required coordinate field {exc}: {file_path}") from exc
+        self.model = next(self.structure.get_models(), None)
+        if self.model is None:
+            raise ValueError(f"Structure contains no coordinate model: {file_path}. "
+                             "Provide a PDB or mmCIF file containing atomic coordinates.")
 
     def get_chain_data(self, chain_id):
         """

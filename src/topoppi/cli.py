@@ -3,18 +3,36 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Optional, Sequence
 
 from topoppi import __version__
 from topoppi.config import DEFAULT_RUN_CONFIG, TopoPPIRunConfig
-from topoppi.errors import TopoPPIError
+from topoppi.errors import ExecutionCancelled, PluginError, TopoPPIError
 from topoppi.logging_utils import setup_logging
-from topoppi.pipeline import run_interface_mapping
+
+
+def run_interface_mapping(*args, **kwargs):
+    """Preserve the mapping entry point while loading its renderer on demand."""
+    from topoppi.pipeline import run_interface_mapping as run
+
+    return run(*args, **kwargs)
+
+
+def _platform_help():
+    from topoppi.plugins import get_registry
+
+    commands = get_registry().commands()
+    text = "Core commands: interface, geometry, representation, plugins, render. "
+    if commands:
+        text += "Installed plugin commands: " + ", ".join(commands) + ". "
+    return text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="topoppi",
         description="Create an annotated 2D atlas or 3D interface view from a protein complex.",
         epilog=(
+            _platform_help()
+            + "\n"
             "Create a map: topoppi complex.pdb -A A -B B -o interface_map.png\n"
             "Restyle an atlas: topoppi render interface.npz -o interface.svg\n"
             "View its 3D surface: topoppi render interface.npz --view surface -o surface.png\n"
@@ -36,9 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
     structure.add_argument("pdb_file", help="Input PDB or mmCIF structure")
     structure.add_argument(
         "--interaction-source",
-        choices=("prolif", "geometric"),
+        metavar="BACKEND",
         default=defaults.interaction_source,
-        help="Interaction partners for residue weights and annotations: ProLIF or heavy-atom contacts",
+        help="Chemical backend name (default: prolif), or geometric for heavy-atom contacts",
     )
     structure.add_argument(
         "-A",
@@ -55,9 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Partner chain used to locate the interface",
     )
     structure.add_argument(
-        "--prolif",
+        "--interactions", "--prolif",
+        dest="prolif",
         default=argparse.SUPPRESS,
-        help="Existing ProLIF JSON; omit to generate one beside the output image",
+        help="Existing interaction JSON; omit to generate one beside the output image (--prolif is an alias)",
     )
     structure.add_argument(
         "--geometric-fallback-distance",
@@ -90,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--geometric-interaction-fallback",
         action="store_true",
         default=defaults.visualization.use_geometric_interaction_fallback,
-        help="Use distance-based interaction assignments when ProLIF generation fails",
+        help="Use distance-based interaction assignments when chemical interaction generation fails",
     )
 
     surface = parser.add_argument_group("surface generation")
@@ -330,6 +351,13 @@ def _render_atlas(argv):
 
         if Path(args.output).resolve() == Path(args.atlas_file).resolve():
             raise ValueError("Choose an image output path separate from the saved atlas.")
+        if args.export_atlas and Path(args.export_atlas).resolve() == Path(args.output).resolve():
+            raise ValueError("Choose separate image and atlas output paths.")
+        annotation_file = getattr(args, "annotation_file", None)
+        if args.export_atlas and annotation_file and (
+            Path(args.export_atlas).expanduser().resolve() == Path(annotation_file).expanduser().resolve()
+        ):
+            raise ValueError("Choose separate annotation input and atlas output paths.")
         _prepare_output_path(args.output)
         document = load_atlas(args.atlas_file)
         style = dict(document.style)
@@ -354,8 +382,6 @@ def _render_atlas(argv):
         figure = document.visualizer.plot_patches(displayed_patches, output_file=args.output, show=False,
                                                   style_config=style)
         if args.export_atlas:
-            if Path(args.export_atlas).resolve() == Path(args.output).resolve():
-                raise ValueError("Choose separate image and atlas output paths.")
             save_atlas(args.export_atlas, document.patches, document.visualizer, run_metadata=document.metadata)
         import matplotlib.pyplot as plt
 
@@ -367,10 +393,131 @@ def _render_atlas(argv):
     return 0
 
 
+def _plugin_management(argv) -> int:
+    from topoppi.plugins import get_registry
+
+    parser = argparse.ArgumentParser(prog="topoppi plugins", description="Inspect optional installed plugins.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    listing = commands.add_parser("list", help="List providers without importing plugin code")
+    listing.add_argument("--json", action="store_true", help="Print machine-readable metadata")
+    detail = commands.add_parser("info", help="Read one plugin's registration metadata")
+    detail.add_argument("name")
+    detail.add_argument("--json", action="store_true", help="Print machine-readable metadata")
+    args = parser.parse_args(argv)
+    registry = get_registry()
+    if args.command == "list":
+        values = registry.list()
+        if args.json:
+            print(json.dumps([asdict(value) for value in values], indent=2))
+        elif not values:
+            print("No optional TopoPPI plugins are installed.")
+        else:
+            for value in values:
+                print(f"{value.name}\t{value.version}\t{value.description}")
+    else:
+        value = registry.info(args.name)
+        if args.json:
+            print(json.dumps(asdict(value), indent=2))
+        else:
+            print(f"{value.name} {value.version}\n{value.description}")
+            print("Capabilities: " + (", ".join(value.capabilities) or "none"))
+    return 0
+
+
+def _core_analysis(command, argv) -> int:
+    """Run structure/contact/geometry operations without loading the renderer."""
+    from topoppi import compute_geometry, get_interface, load_structure, save_interface
+    from topoppi.config import SurfaceConfig, TopologyConfig
+    from topoppi.execution import ExecutionContext
+
+    parser = argparse.ArgumentParser(prog=f"topoppi {command}", description=(
+        "Extract protein partner contacts." if command == "interface" else
+        "Compute and save native protein-interface geometry."
+    ))
+    parser.add_argument("structure", help="Input PDB or mmCIF structure")
+    parser.add_argument("-A", "--chains-a", "--chain-a", default="A", help="First partner's comma-separated chain IDs")
+    parser.add_argument("-B", "--chains-b", "--chain-b", default="B", help="Second partner's comma-separated chain IDs")
+    parser.add_argument("--contact-distance", type=float, default=6., help="Heavy-atom contact cutoff in angstroms")
+    parser.add_argument("-o", "--output", required=command == "geometry", help=(
+        "Contact JSON destination; defaults to stdout" if command == "interface" else "Native interface NPZ destination"
+    ))
+    if command == "geometry":
+        parser.add_argument("--res", type=float, default=SurfaceConfig().grid_resolution, help="Surface grid spacing in angstroms")
+        parser.add_argument("--cutoff", type=float, default=TopologyConfig().distance_cutoff, help="Interface face cutoff in angstroms")
+    args = parser.parse_args(argv)
+    if args.output and Path(args.output).expanduser().resolve() == Path(args.structure).expanduser().resolve():
+        raise ValueError("Choose an output path separate from the input structure.")
+    context = ExecutionContext()
+    with context.operation(command):
+        structure = load_structure(args.structure)
+        interface = get_interface(structure, args.chains_a, args.chains_b, contact_distance=args.contact_distance)
+        if command == "interface":
+            record = {"interface": interface.metadata(), "contacts": interface.contacts()}
+            text = json.dumps(record, indent=2) + "\n"
+            if args.output:
+                output = Path(args.output)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(text, encoding="utf-8")
+            else:
+                print(text, end="")
+        else:
+            geometry = compute_geometry(interface, surface=SurfaceConfig(grid_resolution=args.res),
+                                        topology=TopologyConfig(distance_cutoff=args.cutoff))
+            output = save_interface(geometry, args.output)
+            print(json.dumps({"output": str(output), "interface": geometry.metadata()}, indent=2))
+    return 0
+
+
+def _platform_dispatch(argv):
+    """Return a handled command's exit code, or None for legacy mapping args."""
+    if not argv or argv[0].startswith("-"):
+        return None
+    command = argv[0]
+    try:
+        if command == "plugins":
+            return _plugin_management(argv[1:])
+        if command in {"interface", "geometry"}:
+            return _core_analysis(command, argv[1:])
+        if command == "representation":
+            from topoppi_representation.cli import main as representation_main
+
+            return representation_main(argv[1:])
+        if command == "render":
+            return _render_atlas(argv[1:])
+        from topoppi.plugins import get_registry
+
+        registry = get_registry()
+        # Entry-point names are top-level plugin namespaces. Selecting one
+        # loads only that registration module, never other installed plugins.
+        if registry.available(command):
+            previous_argv = sys.argv
+            try:
+                sys.argv = [f"topoppi {command}", *argv[1:]]
+                result = registry.run_command(command, argv[1:])
+            finally:
+                sys.argv = previous_argv
+            return int(result or 0)
+        if "." not in command and "/" not in command and "\\" not in command and not Path(command).exists():
+            candidates = {"plugins", "interface", "geometry", "representation", "render", *registry.commands()}
+            suggestions = get_close_matches(command, sorted(candidates), n=1, cutoff=0.8)
+            if suggestions:
+                raise ValueError(f"Unknown command '{command}'. Did you mean 'topoppi {suggestions[0]}'? "
+                                 "Use 'topoppi --help' to list commands.")
+            registry.info(command)  # A missing plugin gets the actionable boundary error.
+    except ExecutionCancelled as exc:
+        print(str(exc), file=sys.stderr)
+        return 130
+    except (PluginError, TopoPPIError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return None
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "render":
-        return _render_atlas(argv[1:])
+    handled = _platform_dispatch(argv)
+    if handled is not None:
+        return handled
     parser = build_parser()
     args = parser.parse_args(argv)
     setup_logging(args.verbose)

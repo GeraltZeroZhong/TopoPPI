@@ -2889,7 +2889,7 @@ class BenchmarkRunner:
                 "end_to_end": elapsed,
                 "measurement_scope": (
                     f"structure loading through {method} and packed UV construction; "
-                    "publication comparison metrics and ablations are excluded"
+                    "quality comparison metrics and ablations are excluded"
                 ),
                 "gpu": {"available": False, "note": "No GPU backend is used."},
             },

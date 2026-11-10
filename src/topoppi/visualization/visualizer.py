@@ -19,12 +19,12 @@ from topoppi.atlas.footprints import (
 )
 from topoppi.atlas.uv import as_corner_uv
 from topoppi.config import DEFAULT_CONTACT_DISTANCE_ANGSTROM, VisualizationConfig
-from topoppi.interactions.interaction_engine import (
-    load_prolif_document,
+from topoppi.interactions.interaction_engine import load_interaction_document
+from topoppi.interactions.metadata import INTERACTION_COLORS, INTERACTION_TYPES
+from topoppi.interactions.records import (
     normalize_interaction_name,
     residue_sequence_token,
 )
-from topoppi.interactions.metadata import INTERACTION_COLORS, INTERACTION_TYPES
 from topoppi.visualization.export import save_figure
 from topoppi.visualization.footprint_rendering import plot_footprints
 
@@ -50,14 +50,6 @@ def select_patches_for_display(patches, visualizer, *, map_style=None, min_point
 
 
 class InterfaceVisualizer:
-    charged_pos = frozenset({"ARG", "LYS", "HIS"})
-    charged_neg = frozenset({"ASP", "GLU"})
-    aromatic = frozenset({"PHE", "TYR", "TRP", "HIS"})
-    cation_atoms = frozenset({"NZ", "NH1", "NH2", "ND1", "NE2"})
-    anion_atoms = frozenset({"OD1", "OD2", "OE1", "OE2", "OXT"})
-    polar_atoms = frozenset({"N", "O", "S", "F"})
-    backbone_atoms = frozenset({"CA", "C", "O", "N"})
-
     def __init__(
         self,
         chain_A_atoms,
@@ -81,8 +73,8 @@ class InterfaceVisualizer:
             chain_a_id: Chain ID string for A (e.g. "A")
             chain_b_id: Chain ID string for B (e.g. "B")
             structure_label: Short structure name displayed in the atlas title
-            prolif_file: Path to the ProLIF interaction JSON
-            interaction_partner_map: Resolved ProLIF Chain-A-to-B residue map.
+            prolif_file: Path to a standard interaction JSON (historical parameter name)
+            interaction_partner_map: Resolved Chain-A-to-B residue map.
                 When omitted, it is reconstructed from ``prolif_file``.
             contact_distance_angstrom: Heavy-atom cutoff used only by the
                 explicitly enabled geometric fallback.
@@ -108,7 +100,7 @@ class InterfaceVisualizer:
         self.last_report = {}
         self.last_style = {}
 
-        # --- Interaction categories (canonicalized from ProLIF output) ---
+        # Canonical categories are independent of the chemical backend.
         self.interaction_types = list(INTERACTION_TYPES)
         self.interaction_rank = {name: index for index, name in enumerate(self.interaction_types)}
         self.interaction_colors = dict(INTERACTION_COLORS)
@@ -128,6 +120,7 @@ class InterfaceVisualizer:
         # Data store: {PDB residue token: set([interaction_types]) }
         self.prolif_data = None
         self.prolif_partners = {}
+        self._interaction_engine = None
 
         if prolif_file:
             self._load_prolif_data(prolif_file)
@@ -137,7 +130,7 @@ class InterfaceVisualizer:
                 interaction_partner_map = self._prolif_partner_label_map()
             if not interaction_partner_map:
                 raise ValueError(
-                    "ProLIF did not yield any interaction residue pairs that resolve against the selected chains."
+                    "The interaction document did not yield any residue pairs that resolve against the selected chains."
                 )
         elif self.config.use_geometric_interaction_fallback:
             if interaction_partner_map is None and self.atoms_B:
@@ -158,7 +151,7 @@ class InterfaceVisualizer:
             else None
         )
         self.interaction_type_source = (
-            "prolif" if self.prolif_data is not None else "geometric_fallback" if self.tree_B is not None else "none"
+            self._interaction_engine if self.prolif_data is not None else "geometric_fallback" if self.tree_B is not None else "none"
         )
         self.interaction_residue_source = self.interaction_type_source
 
@@ -192,6 +185,7 @@ class InterfaceVisualizer:
                     "residue_id": residue.get_id(),
                     "residue_token": self._residue_token(residue.get_id()),
                     "residue_name": residue.get_resname(),
+                    "chain": str(residue.get_parent().id),
                 },
             )
         return metadata
@@ -224,6 +218,27 @@ class InterfaceVisualizer:
             return f"{str(res_name).title()}{res_seq}"
         return str(res_seq)
 
+    def _residue_label(self, key, *, partner=False):
+        """Keep author-chain identity when a displayed partner contains multiple chains."""
+        records = self.residue_metadata_B if partner else self.residue_metadata_A
+        record = records[key]
+        label = self._format_residue_label(record["residue_name"], record["residue_token"])
+        if len({item["chain"] for item in records.values()}) > 1:
+            label = f"{record['chain']}:{label}"
+        return label
+
+    def _label_for_residue(self, mode, key):
+        left = self._residue_label(key)
+        if mode == "chain_a":
+            return left
+        partners = {p: count for p, count in self.interaction_partner_map.get(key, {}).items()
+                    if p in self.residue_metadata_B}
+        if not partners:
+            return left if mode == "pair" else "N/A"
+        best = min(partners, key=lambda p: (-int(partners[p]), self.residue_metadata_B[p]["residue_token"], p))
+        right = self._residue_label(best, partner=True)
+        return right if mode == "chain_b" else f"{left}-{right}"
+
     def _build_label_text(self, mode, res_a_seq, res_a_name, partner_counts):
         a_label = self._format_residue_label(res_a_name, res_a_seq)
         if mode == "chain_a":
@@ -248,16 +263,15 @@ class InterfaceVisualizer:
         return scope
 
     def _load_prolif_data(self, json_path):
-        payload, _raw_types, _raw_partners = load_prolif_document(json_path)
+        payload, _raw_types, _raw_partners = load_interaction_document(json_path)
         engine = str(payload.get("engine") or "").strip().lower()
         expected_a = str(payload.get("chain_a", "")).strip()
         expected_b = str(payload.get("chain_b", "")).strip()
-        if engine and engine != "prolif":
-            raise ValueError(f"Interaction JSON engine must be 'prolif', got {engine!r}.")
+        self._interaction_engine = engine or "prolif"
         if expected_a and self.chain_a_id and expected_a != self.chain_a_id:
-            raise ValueError(f"ProLIF chain_a mismatch: {expected_a} != {self.chain_a_id}")
+            raise ValueError(f"Interaction chain_a mismatch: {expected_a} != {self.chain_a_id}")
         if expected_b and self.chain_b_id and expected_b != self.chain_b_id:
-            raise ValueError(f"ProLIF chain_b mismatch: {expected_b} != {self.chain_b_id}")
+            raise ValueError(f"Interaction chain_b mismatch: {expected_b} != {self.chain_b_id}")
         valid_a = {data["residue_token"] for data in self.residue_metadata_A.values()}
         valid_b = {data["residue_token"] for data in self.residue_metadata_B.values()}
         residue_types = {}
@@ -277,51 +291,17 @@ class InterfaceVisualizer:
         self.prolif_data = residue_types
         self.prolif_partners = partners
         logger.debug(
-            "Loaded ProLIF interactions for %d Chain-%s residues.",
+            "Loaded %s interactions for %d Chain-%s residues.",
+            self._interaction_engine,
             len(self.prolif_data),
             self.chain_a_id,
         )
 
     def _get_interaction_type_heuristic(self, atom_A, atom_B, dist):
-        if dist > max(
-            self.config.vdw_distance,
-            self.config.ionic_distance,
-            self.config.polar_contact_distance,
-        ):
-            return None
+        """Preserve the legacy display classifier through the chemistry plugin."""
+        from topoppi import plugins
 
-        res_A = atom_A.get_parent().get_resname()
-        res_B = atom_B.get_parent().get_resname()
-        name_A = atom_A.get_name()
-        name_B = atom_B.get_name()
-        elem_A = atom_A.element.upper()
-        elem_B = atom_B.element.upper()
-
-        is_ani_A = (res_A in self.charged_neg and name_A in self.anion_atoms) or name_A == "OXT"
-        is_ani_B = (res_B in self.charged_neg and name_B in self.anion_atoms) or name_B == "OXT"
-        is_cat_A = res_A in self.charged_pos and name_A in self.cation_atoms
-        is_cat_B = res_B in self.charged_pos and name_B in self.cation_atoms
-        is_aro_A = res_A in self.aromatic and name_A not in self.backbone_atoms
-        is_aro_B = res_B in self.aromatic and name_B not in self.backbone_atoms
-        opposite_charge = (is_cat_A and is_ani_B) or (is_ani_A and is_cat_B)
-
-        if dist < self.config.ionic_distance and opposite_charge:
-            return "Ionic"
-        if dist < self.config.ionic_distance and ((is_aro_A and is_cat_B) or (is_cat_A and is_aro_B)):
-            return "PiCation"
-
-        polar_pair = elem_A in self.polar_atoms and elem_B in self.polar_atoms
-        if dist < self.config.polar_contact_distance and polar_pair:
-            return "PolarContact"
-
-        if dist < self.config.vdw_distance:
-            nonpolar_A = elem_A in {"C", "S"} and name_A not in self.backbone_atoms
-            nonpolar_B = elem_B in {"C", "S"} and name_B not in self.backbone_atoms
-            if nonpolar_A and nonpolar_B:
-                return "Hydrophobic"
-            return "VdWContact"
-
-        return None
+        return plugins.run("chemistry.classify_contact", atom_A, atom_B, dist, self.config)
 
     def _geometric_interaction_types(self):
         if self._geometric_types_cache is not None:
@@ -404,7 +384,7 @@ class InterfaceVisualizer:
             style["color_by_type"] or style["residue_scope"] == "interaction"
         ):
             raise ValueError(
-                "Interaction-residue rendering requires a ProLIF JSON. "
+                "Interaction-residue rendering requires an interaction JSON. "
                 "Geometric inference is disabled by default and must be enabled explicitly."
             )
         interaction_colors = dict(self.interaction_colors)
@@ -499,8 +479,8 @@ class InterfaceVisualizer:
             "residue_scope": style["residue_scope"],
             "interaction_residue_source": self.interaction_residue_source,
             "interaction_residue_definition": (
-                "Chain A residue present in at least one resolved ProLIF interaction record with Chain B"
-                if self.interaction_residue_source == "prolif"
+                f"Chain A residue present in at least one resolved {self.interaction_residue_source} interaction record with Chain B"
+                if self.prolif_data is not None
                 else (
                     "Chain A residue with any Chain A/B heavy-atom pair at distance <= "
                     f"{self.contact_distance_angstrom:g} Angstrom "
@@ -602,12 +582,8 @@ class InterfaceVisualizer:
 
             displayed_residues.add(residue_label)
 
-            res_token = data["residue_token"]
-            res_name = data["residue_name"]
-            label_text = self._build_label_text(
-                style.get("label_mode", "chain_a"), res_token, res_name, data.get("partners", {})
-            )
-            res_name_for_id = self._format_residue_label(res_name, res_token)
+            label_text = self._label_for_residue(style.get("label_mode", "chain_a"), residue_label)
+            res_name_for_id = self._residue_label(residue_label)
             pieces = data["pieces"]
             for piece_index, piece in enumerate(pieces):
                 u_center, v_center = piece["uv_centroid"]

@@ -9,7 +9,7 @@ import numpy as np
 from matplotlib import colors
 from matplotlib import patches as mpatches
 from matplotlib.cm import ScalarMappable
-from matplotlib.transforms import Bbox
+from matplotlib.transforms import Bbox, blended_transform_factory
 from mpl_toolkits.mplot3d import Axes3D, art3d, proj3d
 
 from topoppi.atlas.footprints import mesh_vertex_residue_labels
@@ -50,15 +50,21 @@ def surface_geometry(mesh, vertex_labels):
         different = labels[:, k] != labels[:, j]
         borders.extend(np.stack([midpoint[different], centre[different]], axis=1))
     uv_key = "uv_global" if "uv_global" in mesh.metadata else "uv"
-    topology = uv_seam_topology(mesh, as_corner_uv(mesh, key=uv_key))
+    if uv_key in mesh.metadata:
+        topology = uv_seam_topology(mesh, as_corner_uv(mesh, key=uv_key))
+        edges, boundary_mask, seam_mask = topology.edges, topology.boundary_mask, topology.seam_mask
+    else:
+        # Native, pre-UV review: there are real boundaries but no optimized seams.
+        edges, counts = np.unique(np.sort(mesh.edges, axis=1), axis=0, return_counts=True)
+        boundary_mask, seam_mask = counts == 1, np.zeros(len(edges), dtype=bool)
     return {
         "triangles": triangles, "corner_labels": labels,
         "cells": np.concatenate(cells), "labels": labels.T.reshape(-1),
         "normals": np.concatenate(cell_normals),
         "residue_borders": np.asarray(borders).reshape(-1, 2, 3),
-        "mesh_segments": vertices[topology.edges],
-        "boundary_segments": vertices[topology.edges[topology.boundary_mask]],
-        "seam_segments": vertices[topology.edges[topology.seam_mask]],
+        "mesh_segments": vertices[edges],
+        "boundary_segments": vertices[edges[boundary_mask]],
+        "seam_segments": vertices[edges[seam_mask]],
     }
 
 
@@ -236,7 +242,7 @@ def plot_surface(visualizer, patches, style, output_file=None, show=True):
         lookup = {}
         for key in sorted(set(g["labels"])):
             metadata = visualizer.residue_metadata_A[key]
-            uid = f"{patch_id}_{visualizer._format_residue_label(metadata['residue_name'], metadata['residue_token'])}"
+            uid = f"{patch_id}_{visualizer._residue_label(key)}"
             lookup[key] = uid
             color = style.get("color", "red") if style["map_style"] == "markers" else style["footprint_color"]
             marker_eligible = key in eligible
@@ -262,11 +268,7 @@ def plot_surface(visualizer, patches, style, output_file=None, show=True):
                 color = style.get("residue_color_overrides", {}).get(key, color)
             group = transform(g["cells"][g["labels"] == key]).mean(axis=1)
             positions = group[np.argsort(np.linalg.norm(group - group.mean(axis=0), axis=1))]
-            partners = {visualizer.residue_metadata_B[p]["residue_token"]: n
-                        for p, n in visualizer.interaction_partner_map.get(key, {}).items()
-                        if p in visualizer.residue_metadata_B}
-            label = visualizer._build_label_text(style.get("label_mode", "chain_a"), metadata["residue_token"],
-                                                metadata["residue_name"], partners)
+            label = visualizer._label_for_residue(style.get("label_mode", "chain_a"), key)
             wanted = (key in eligible and style.get("show_labels", True) and style["footprint_labels"] != "none"
                       and (style["footprint_labels"] == "all" or key in highlights))
             if style["map_style"] == "markers":
@@ -405,16 +407,25 @@ def plot_surface(visualizer, patches, style, output_file=None, show=True):
     }
     if values is not None:
         color_axis = fig.add_axes([.32, .075, .36, .012])
+        # Keep room for tick text and units when a GUI canvas shrinks the
+        # figure; text sizes and this footer both use physical dimensions.
+        def locate_colorbar(_axes, _renderer):
+            height_mm = fig.get_figheight() * 25.4
+            return Bbox.from_bounds(.32, 8 / height_mm, .36, 1.5 / height_mm)
+
+        color_axis.set_axes_locator(locate_colorbar)
         finite = [values[key] for key in eligible if values.get(key) is not None]
         below, above = any(v < norm.vmin for v in finite), any(v > norm.vmax for v in finite)
         extend = "both" if below and above else "min" if below else "max" if above else "neither"
         visualizer.last_report.update(below_scale_residue_count=sum(v < norm.vmin for v in finite),
                                       above_scale_residue_count=sum(v > norm.vmax for v in finite), colorbar_extend=extend)
         bar = fig.colorbar(ScalarMappable(norm=norm, cmap=VALUE_CMAP), cax=color_axis, orientation="horizontal", extend=extend)
-        bar.set_label(style.get("annotation_label", "Value"), fontsize=8)
-        bar.ax.tick_params(labelsize=7, length=2)
+        bar.set_label(style.get("annotation_label", "Value"), fontsize=8, labelpad=2)
+        bar.ax.tick_params(labelsize=7, length=2, pad=2)
         if any(values.get(key) is None for key in eligible):
-            fig.text(.73, .078, "■ NA", color=style["missing_color"], fontsize=8)
+            footer_transform = blended_transform_factory(fig.transFigure, fig.dpi_scale_trans)
+            fig.text(.73, 8.75 / 25.4, "■ NA", transform=footer_transform,
+                     color=style["missing_color"], fontsize=8, va="center")
     elif used_types:
         ax.set_position([.025, .10, .95, .875])
         fig.legend(handles=[mpatches.Patch(color=interaction_colors[t], label=t)

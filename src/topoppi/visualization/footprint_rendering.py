@@ -17,7 +17,7 @@ from matplotlib import colors
 from matplotlib.cm import ScalarMappable
 from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.patches import Rectangle
-from matplotlib.transforms import Bbox
+from matplotlib.transforms import Bbox, blended_transform_factory
 from shapely.geometry import Polygon
 from shapely.ops import polylabel, unary_union
 
@@ -288,8 +288,7 @@ def plot_footprints(visualizer, patches, style, output_file=None, show=True):
             collection = PolyCollection(polygons, facecolors=color, edgecolors="none", antialiaseds=False,
                                         zorder=1, picker=True)
             ax.add_collection(collection)
-            metadata = visualizer.residue_metadata_A[key]
-            label = visualizer._format_residue_label(metadata["residue_name"], metadata["residue_token"])
+            label = visualizer._residue_label(key)
             uid = f"{patch_id}_{label}"
             collection.set_gid(uid)
             anchor = footprint_anchor(polygons)
@@ -299,14 +298,7 @@ def plot_footprints(visualizer, patches, style, output_file=None, show=True):
                              and (style["footprint_labels"] == "all" or key in highlights))
             if visible_label:
                 offset = np.asarray(style.get("label_offsets", {}).get(uid, (0, 0)))
-                partners = {
-                    visualizer.residue_metadata_B[partner]["residue_token"]: count
-                    for partner, count in visualizer.interaction_partner_map.get(key, {}).items()
-                    if partner in visualizer.residue_metadata_B
-                }
-                label_text = visualizer._build_label_text(
-                    style.get("label_mode", "chain_a"), metadata["residue_token"], metadata["residue_name"], partners
-                )
+                label_text = visualizer._label_for_residue(style.get("label_mode", "chain_a"), key)
                 text = ax.text(*(anchor + offset), label_text, fontsize=style.get("font_size", 8),
                                fontfamily=style.get("font_family", "sans-serif"), ha="center", va="center",
                                color="#202B33", zorder=5, picker=True,
@@ -341,16 +333,25 @@ def plot_footprints(visualizer, patches, style, output_file=None, show=True):
                         wspace=.045, hspace=.045)
     if values is not None:
         color_axis = fig.add_axes([.34, 8 / canvas_height_mm, .32, 1.5 / canvas_height_mm])
+        # GUI canvases resize the figure after creation. Keep the footer in
+        # physical units, like its fonts, during both redraws and file export.
+        def locate_colorbar(_axes, _renderer):
+            current_height_mm = fig.get_figheight() * 25.4
+            return Bbox.from_bounds(.34, 8 / current_height_mm, .32, 1.5 / current_height_mm)
+
+        color_axis.set_axes_locator(locate_colorbar)
         colorbar = fig.colorbar(ScalarMappable(norm=norm, cmap=VALUE_CMAP), cax=color_axis,
                                orientation="horizontal", extend=scale_extend)
         colorbar.set_label(style.get("annotation_label", "Value"), fontsize=8, labelpad=2)
         colorbar.ax.tick_params(labelsize=7, length=2, width=.5, pad=2)
         colorbar.outline.set_linewidth(.45)
         if any(values.get(key) is None for key in eligible):
-            fig.add_artist(Rectangle((.70, 8 / canvas_height_mm), 3 / 178, 1.5 / canvas_height_mm,
-                                     transform=fig.transFigure, facecolor=style.get("missing_color", "#D9D9D9"),
+            footer_transform = blended_transform_factory(fig.transFigure, fig.dpi_scale_trans)
+            fig.add_artist(Rectangle((.70, 8 / 25.4), 3 / 178, 1.5 / 25.4,
+                                     transform=footer_transform, facecolor=style.get("missing_color", "#D9D9D9"),
                                      edgecolor="#536873", linewidth=.4))
-            fig.text(.726, 8.75 / canvas_height_mm, "NA", fontsize=7, va="center", color="#202B33")
+            fig.text(.726, 8.75 / 25.4, "NA", transform=footer_transform,
+                     fontsize=7, va="center", color="#202B33")
     hidden = _place_labels(fig, records, style)
     visualizer.last_report = {
         "status": "ok", "map_style": "footprints", "patch_count": len(patches),

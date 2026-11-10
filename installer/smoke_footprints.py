@@ -10,7 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 from topoppi.atlas.uv import as_corner_uv
-from topoppi.gui_app import ProtSurfApp
+from topoppi.gui_app import InterfaceApp
 from topoppi.visualization.atlas_io import load_atlas
 
 
@@ -29,7 +29,7 @@ def main() -> None:
 
     root = tk.Tk()
     root.withdraw()
-    app = ProtSurfApp(root)
+    app = InterfaceApp(root)
     try:
         with (
             patch("topoppi.gui_app.ui_mixin.messagebox.showinfo"),

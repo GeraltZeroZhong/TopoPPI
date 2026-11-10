@@ -1,3 +1,3 @@
-from .app import ProtSurfApp
+from .app import InterfaceApp
 
-__all__ = ["ProtSurfApp"]
+__all__ = ["InterfaceApp"]

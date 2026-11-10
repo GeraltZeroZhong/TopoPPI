@@ -1,0 +1,23 @@
+[
+  {
+    "name": "chemistry",
+    "title": "Chemical interactions",
+    "description": "Annotate interface contacts with ProLIF while creating a map.",
+    "included": true,
+    "guide": "https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/docs/chemistry.md"
+  },
+  {
+    "name": "affinity",
+    "title": "Affinity prediction",
+    "description": "Predict binding affinity or mutation effects with a fitted model, then inspect the interface.",
+    "install": "topoppi-affinity>=3.0.0,<3.1",
+    "guide": "https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/README.md"
+  },
+  {
+    "name": "hotspot",
+    "title": "Hotspot ranking",
+    "description": "Rank interface residues with a fitted model and display their scores on the surface.",
+    "install": "topoppi-hotspot>=3.0.0,<3.1",
+    "guide": "https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/hotspot/README.md"
+  }
+]
