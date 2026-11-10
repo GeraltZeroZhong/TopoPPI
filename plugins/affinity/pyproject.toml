@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "topoppi-affinity"
+version = "3.0.0"
+description = "Affinity modelling using interface descriptors produced by the TopoPPI workflow"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["topoppi[representation]>=3.0.0,<3.1", "scikit-learn>=1.6,<1.8", "pandas>=2.0", "joblib>=1.5,<1.6", "openpyxl>=3.1"]
+
+[project.urls]
+Documentation = "https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/README.md"
+Repository = "https://github.com/GeraltZeroZhong/TopoPPI"
+Issues = "https://github.com/GeraltZeroZhong/TopoPPI/issues"
+
+[project.optional-dependencies]
+models = [
+  "torch>=2.2",
+  "torch-geometric>=2.5",
+  "esm==3.2.1.post1",
+  "transformers>=4.38,<4.48.2",
+  # The last official Intel macOS Torch wheel (2.2.2) needs NumPy's 1.x ABI.
+  "numpy>=1.26,<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
+dev = ["pytest>=8", "build>=1", "ruff>=0.4"]
+
+[project.entry-points."topoppi.plugins"]
+affinity = "topoppi_affinity.plugin:plugin"
+
+[project.scripts]
+topoppi-affinity = "topoppi_affinity.cli:main"
+
+[tool.setuptools]
+packages = [
+  "topoppi_affinity", "topoppi_affinity.atlas_review", "topoppi_affinity_tools",
+  "topoppi_affinity_tools.features",
+  "topoppi_affinity_tools.models",
+]
+package-dir = {topoppi_affinity = "topoppi_affinity", topoppi_affinity_tools = "tools"}
+
+[tool.setuptools.package-data]
+topoppi_affinity = ["data/*.json", "data/example/*", "data/production/*/*.json", "data/production/*/*.npz", "data/production/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501", "E701"]

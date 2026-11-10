@@ -22,9 +22,12 @@ class ReleaseMetadataTests(unittest.TestCase):
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(f"TopoPPI {__version__}", readme)
-        if f"## [{__version__}] - In preparation" in changelog:
+        development_version = ".dev" in __version__
+        release_version = __version__.split(".dev", 1)[0]
+        if development_version:
+            self.assertIn(f"## [{release_version}] - Unreleased", changelog)
             self.assertIsNone(citation_date, "A working-tree version has no release date yet.")
-            self.assertIn("in preparation", readme)
+            self.assertIn("development version", readme)
             self.assertIn("https://github.com/GeraltZeroZhong/TopoPPI/releases", readme)
         else:
             self.assertIsNotNone(citation_date)
@@ -51,7 +54,11 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         for platform_name in ("windows", "macos"):
             platform_readme = (ROOT / "installer" / platform_name / "README.md").read_text(encoding="utf-8")
-            self.assertIn(f"TopoPPI {__version__}", platform_readme)
+            if development_version:
+                self.assertIn(f"TopoPPI {release_version.rsplit('.', 1)[0]}", platform_readme)
+                self.assertIn("source builds", platform_readme)
+            else:
+                self.assertIn(f"TopoPPI {__version__}", platform_readme)
 
     def test_windows_installer_propagates_bootstrap_failure_and_hides_the_gui_console(self):
         installer = (ROOT / "installer" / "windows" / "TopoPPI.iss").read_text(encoding="utf-8")
@@ -142,8 +149,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         macos = (ROOT / ".github" / "workflows" / "macos-app.yml").read_text(encoding="utf-8")
 
         for workflow in (windows, macos):
-            self.assertIn("from topoppi.gui_app import ProtSurfApp", workflow)
-            self.assertIn("ProtSurfApp(root)", workflow)
+            self.assertIn("from topoppi.gui_app import InterfaceApp", workflow)
+            self.assertIn("InterfaceApp(root)", workflow)
             self.assertIn("root.update_idletasks()", workflow)
         self.assertIn("TopoPPI Command Prompt.lnk", windows)
         self.assertIn("& $cli --version", windows)
@@ -154,11 +161,11 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("timeout-minutes: 40", windows)
         self.assertIn('"/DIR=`"$installDir`""', windows)
         self.assertIn('"/LOG=`"$installLog`""', windows)
-        self.assertIn('"TopoPPI 用户"', windows)
+        self.assertIn("[char]0x7528 + [char]0x6237", windows)
         self.assertIn('@("topoppi --version", "exit") | & $commandPrompt', windows)
         self.assertIn(r"tests\fixtures\tiny_complex.pdb", windows)
         self.assertNotIn(r"tests\fixtures\1bvk.pdb", windows)
-        self.assertIn("tests/fixtures/1bvk.pdb", macos)
+        self.assertIn("tests/fixtures/synthetic_complex.pdb", macos)
         self.assertIn('"cmake<4"', macos)
         self.assertEqual(macos.count('export PATH="$RUNNER_TEMP/topoppi-macos-build/bin:$PATH"'), 2)
         for workflow in (windows, macos):

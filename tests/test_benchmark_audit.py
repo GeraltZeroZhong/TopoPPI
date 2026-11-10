@@ -171,7 +171,7 @@ class BenchmarkAuditTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertNotIn(None, row)
-        self.assertEqual(row["hotspot_residues_a"], "A:ARG:12;A:TYR:45")
+        self.assertEqual(row["hotspot_residues_a"], "A:ALA:1;A:PHE:2")
         self.assertEqual(row["prolif_file"], "example.prolif.json")
         self.assertEqual(row["prolif_sha256"], "<64-character-sha256>")
         self.assertEqual(row["record_id"], "record-0001")

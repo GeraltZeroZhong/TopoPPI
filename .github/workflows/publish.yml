@@ -25,7 +25,13 @@ jobs:
           set -euo pipefail
           version="$(PYTHONPATH=src python -c 'from topoppi._version import __version__; print(__version__)')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [[ "$version" =~ (a|b|rc)[0-9]*$ ]]; then
+          plugin_version="$(PYTHONPATH=plugins/affinity python -c 'from topoppi_affinity import __version__; print(__version__)')"
+          hotspot_version="$(PYTHONPATH=plugins/hotspot python -c 'from topoppi_hotspot import __version__; print(__version__)')"
+          if [[ "$plugin_version" != "$version" || "$hotspot_version" != "$version" ]]; then
+            echo "Core and affinity plugin versions differ: $version / $plugin_version" >&2
+            exit 1
+          fi
+          if [[ "$version" =~ (a|b|rc|\.dev)[0-9]*$ ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
@@ -49,14 +55,38 @@ jobs:
     needs: metadata
     uses: ./.github/workflows/macos-app.yml
 
+  affinity:
+    needs: metadata
+    uses: ./.github/workflows/affinity-plugin.yml
+    with:
+      release_artifacts: true
+
+  hotspot:
+    needs: metadata
+    uses: ./.github/workflows/hotspot-plugin.yml
+    with:
+      release_artifacts: true
+
   assemble:
     needs:
       - metadata
       - linux
       - windows
       - macos
+      - affinity
+      - hotspot
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-affinity
+          path: incoming/affinity
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-hotspot
+          path: incoming/hotspot
+
       - uses: actions/download-artifact@v8
         with:
           name: release-linux
@@ -91,6 +121,10 @@ jobs:
           expected = {
               f"linux/topoppi-{version}-py3-none-any.whl",
               f"linux/topoppi-{version}.tar.gz",
+              f"affinity/topoppi_affinity-{version}-py3-none-any.whl",
+              f"affinity/topoppi_affinity-{version}.tar.gz",
+              f"hotspot/topoppi_hotspot-{version}-py3-none-any.whl",
+              f"hotspot/topoppi_hotspot-{version}.tar.gz",
               "linux/OptCuts_bin-linux-x86_64",
               "linux/TopoPPI-LICENSE.txt",
               "linux/OptCuts-LICENSE.txt",
@@ -196,6 +230,10 @@ jobs:
           mkdir pypi-dist
           install -m 644 "release-assets/topoppi-${VERSION}-py3-none-any.whl" pypi-dist/
           install -m 644 "release-assets/topoppi-${VERSION}.tar.gz" pypi-dist/
+          install -m 644 "release-assets/topoppi_affinity-${VERSION}-py3-none-any.whl" pypi-dist/
+          install -m 644 "release-assets/topoppi_affinity-${VERSION}.tar.gz" pypi-dist/
+          install -m 644 "release-assets/topoppi_hotspot-${VERSION}-py3-none-any.whl" pypi-dist/
+          install -m 644 "release-assets/topoppi_hotspot-${VERSION}.tar.gz" pypi-dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.14.2
@@ -211,6 +249,9 @@ jobs:
       - pypi
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
       - uses: actions/download-artifact@v8
         with:
           name: release-bundle
@@ -231,30 +272,72 @@ jobs:
           from pathlib import Path
 
           version = os.environ["VERSION"]
-          expected = {}
-          for name in (f"topoppi-{version}-py3-none-any.whl", f"topoppi-{version}.tar.gz"):
-              content = Path("release-assets", name).read_bytes()
-              expected[name] = hashlib.sha256(content).hexdigest()
-
-          url = f"https://pypi.org/pypi/topoppi/{version}/json"
-          for attempt in range(12):
-              try:
-                  with urllib.request.urlopen(url, timeout=30) as response:
-                      payload = json.load(response)
-              except urllib.error.HTTPError as exc:
-                  if exc.code != 404 or attempt == 11:
-                      raise
-              else:
-                  actual = {
-                      item["filename"]: item["digests"]["sha256"]
-                      for item in payload["urls"]
-                  }
-                  if all(actual.get(name) == digest for name, digest in expected.items()):
-                      break
-                  if attempt == 11:
-                      raise SystemExit(f"PyPI digest mismatch: expected={expected}, actual={actual}")
-              time.sleep(10)
+          for project in ('topoppi', 'topoppi-affinity', 'topoppi-hotspot'):
+              normalized = project.replace('-', '_')
+              expected = {}
+              for name in (f"{normalized}-{version}-py3-none-any.whl", f"{normalized}-{version}.tar.gz"):
+                  content = Path("release-assets", name).read_bytes()
+                  expected[name] = hashlib.sha256(content).hexdigest()
+              url = f"https://pypi.org/pypi/{project}/{version}/json"
+              for attempt in range(12):
+                  try:
+                      with urllib.request.urlopen(url, timeout=30) as response:
+                          payload = json.load(response)
+                  except urllib.error.HTTPError as exc:
+                      if exc.code != 404 or attempt == 11:
+                          raise
+                  else:
+                      actual = {item['filename']: item['digests']['sha256'] for item in payload['urls']}
+                      if all(actual.get(name) == digest for name, digest in expected.items()):
+                          break
+                      if attempt == 11:
+                          raise SystemExit(f"PyPI digest mismatch for {project}: expected={expected}, actual={actual}")
+                  time.sleep(10)
           PY
+      - name: Verify Core and all three prediction tasks from PyPI
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          HF_HUB_OFFLINE: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/pypi-install"
+          "$RUNNER_TEMP/pypi-install/bin/python" -m pip install "topoppi==$VERSION"
+          "$RUNNER_TEMP/pypi-install/bin/python" - <<'PY'
+          import importlib.util
+          import tempfile
+          import topoppi
+          from topoppi.examples import copy_example
+
+          assert topoppi.plugins.available('chemistry')
+          assert not topoppi.plugins.available('affinity')
+          assert not topoppi.plugins.available('hotspot')
+          assert importlib.util.find_spec('torch') is None
+          with tempfile.TemporaryDirectory() as directory:
+              path = copy_example(directory, synthetic=True)
+              interface = topoppi.get_interface(topoppi.load_structure(path), 'A', 'B')
+              result = topoppi.run('chemistry.detect', interface)
+              assert result.engine == 'prolif' and len(result.interactions) == 6
+          PY
+          "$RUNNER_TEMP/pypi-install/bin/python" -m pip install "topoppi[affinity,hotspot]==$VERSION" "topoppi-affinity==$VERSION" "topoppi-hotspot==$VERSION"
+          "$RUNNER_TEMP/pypi-install/bin/python" -m topoppi_affinity --help
+          "$RUNNER_TEMP/pypi-install/bin/python" -m topoppi_affinity models status
+          "$RUNNER_TEMP/pypi-install/bin/python" -m topoppi_hotspot --help
+          "$RUNNER_TEMP/pypi-install/bin/python" -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
+          install -m 755 release-assets/OptCuts_bin-linux-x86_64 "$RUNNER_TEMP/pypi-install/bin/OptCuts_bin"
+          python - <<'PY'
+          import os
+          import tarfile
+          from pathlib import Path
+
+          version = os.environ['VERSION']
+          with tarfile.open(f'release-assets/topoppi-{version}.tar.gz') as archive:
+              for name in ('smoke_affinity.py', 'smoke_binding.py'):
+                  source = archive.extractfile(f'topoppi-{version}/installer/{name}')
+                  Path(os.environ['RUNNER_TEMP'], name).write_bytes(source.read())
+          PY
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/pypi-install/bin/python" smoke_binding.py --no-gui
 
   publish_release:
     if: github.event_name == 'push' && github.ref_type == 'tag'

@@ -7,15 +7,17 @@ from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 import trimesh
-from scipy.spatial import cKDTree
 
 from topoppi.atlas.seams import UVSeamTopology, uv_seam_topology
 from topoppi.atlas.uv import as_corner_uv
+from topoppi.contacts import geometric_contact_partner_map as geometric_contact_partner_map
 from topoppi.mesh.provenance import (
     OPTCUTS_GEOMETRY_VERTEX_IDS,
     SOURCE_ATOM_IDS,
     SOURCE_VERTEX_IDS,
 )
+from topoppi.residues import atom_residue_label as atom_residue_label
+from topoppi.residues import source_atom_residue_labels as source_atom_residue_labels
 
 _EPS = 1e-12
 
@@ -52,19 +54,8 @@ class _UnionFind:
         return np.fromiter((self.find(index) for index in range(len(self.parent))), dtype=np.int64)
 
 
-def atom_residue_label(atom) -> str:
-    """Return a stable chain:name:sequence residue label for a Bio.PDB atom."""
-
-    residue = atom.get_parent()
-    chain = residue.get_parent()
-    insertion = str(residue.id[2]).strip()
-    return f"{chain.id}:{residue.get_resname()}:{residue.id[1]}{insertion}"
 
 
-def source_atom_residue_labels(atoms: Sequence[object]) -> np.ndarray:
-    """Return residue labels indexed exactly like a chain's source-atom array."""
-
-    return np.asarray([atom_residue_label(atom) for atom in atoms], dtype=object)
 
 
 def mesh_vertex_residue_labels(
@@ -93,37 +84,6 @@ def contact_partner_counts(contact_pairs: Iterable[tuple[str, str]]) -> dict[str
     return {residue: float(len(values)) for residue, values in partners.items()}
 
 
-def geometric_contact_partner_map(
-    coords_a: np.ndarray,
-    atoms_a: Sequence[object],
-    coords_b: np.ndarray,
-    atoms_b: Sequence[object],
-    *,
-    distance_cutoff: float,
-) -> dict[str, dict[str, int]]:
-    """Count heavy-atom contacts for every contacting residue pair.
-
-    The outer and inner keys are the stable residue labels used throughout the
-    residue-footprint objective.  Inner values count heavy-atom pairs inside
-    ``distance_cutoff``; the set of inner keys therefore defines each Chain A
-    residue's distinct-partner contact degree.
-    """
-
-    points_a = np.asarray(coords_a, dtype=np.float64)
-    points_b = np.asarray(coords_b, dtype=np.float64)
-    if len(points_a) == 0 or len(points_b) == 0:
-        return {}
-    labels_a = source_atom_residue_labels(atoms_a)
-    labels_b = source_atom_residue_labels(atoms_b)
-    neighborhoods = cKDTree(points_b).query_ball_point(points_a, r=float(distance_cutoff))
-    partners: dict[str, dict[str, int]] = defaultdict(dict)
-    for index_a, indices_b in enumerate(neighborhoods):
-        label_a = str(labels_a[index_a])
-        counts = partners[label_a]
-        for index_b in indices_b:
-            label_b = str(labels_b[index_b])
-            counts[label_b] = counts.get(label_b, 0) + 1
-    return {label_a: dict(sorted(counts.items())) for label_a, counts in sorted(partners.items()) if counts}
 
 
 def contact_partner_degrees(

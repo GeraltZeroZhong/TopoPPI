@@ -208,6 +208,41 @@ def test_colorbar_extensions_exclude_residues_outside_annotation_scope():
         plt.close(figure)
 
 
+@pytest.mark.parametrize("size", [(7.1, 5.1), (6., 3.3)])
+@pytest.mark.parametrize("use_atlas", [True, False])
+def test_numeric_footer_stays_inside_resized_canvas_and_png_export(tmp_path, size, use_atlas):
+    viz = visualizer()
+    annotations = {"A:GLY:1": -.5}
+    figure = viz.plot_patches([square_patch()], show=False, style_config={
+        "map_style": "footprints", "annotation_values": annotations, "use_uv_atlas": use_atlas,
+        "annotation_label": "Measured log2 enrichment", "value_min": -1., "value_max": 1.,
+    })
+    observed = []
+
+    def record_bounds(event):
+        color_axis = figure.axes[-1]
+        texts = [color_axis.xaxis.label, *color_axis.get_xticklabels(), *figure.texts]
+        observed.append((figure.bbox.frozen(), [text.get_window_extent(event.renderer).frozen()
+                                               for text in texts if text.get_visible() and text.get_text()]))
+
+    try:
+        figure.canvas.mpl_connect("draw_event", record_bounds)
+        figure.set_size_inches(*size)
+        figure.canvas.draw()
+        destination = tmp_path / "resized-assay.png"
+        save_figure(figure, destination)
+        assert len(observed) >= 2, "Check both the onscreen-sized draw and the export renderer"
+        for canvas, text_bounds in observed:
+            for bounds in text_bounds:
+                assert bounds.x0 >= canvas.x0 and bounds.x1 <= canvas.x1
+                assert bounds.y0 >= canvas.y0 and bounds.y1 <= canvas.y1
+        assert destination.stat().st_size > 0
+        assert viz.last_style["annotation_values"] == annotations
+        assert (viz.last_style["resolved_value_min"], viz.last_style["resolved_value_max"]) == (-1., 1.)
+    finally:
+        plt.close(figure)
+
+
 def test_highlights_custom_offsets_and_publication_exports(tmp_path):
     viz = visualizer()
     figure = viz.plot_patches([square_patch()], show=False, style_config={

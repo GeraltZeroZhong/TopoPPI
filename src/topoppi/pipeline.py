@@ -27,9 +27,12 @@ from topoppi.config import TopoPPIRunConfig
 from topoppi.errors import InputDataError, PipelineError
 from topoppi.file_utils import sha256_file
 from topoppi.interactions.interaction_engine import (
+    generate_interactions,
     generate_prolif_interactions,
-    load_prolif_partner_map,
+    load_interaction_document,
+    load_interaction_partner_map,
 )
+from topoppi.interface import prepare_interface
 from topoppi.io.io_loader import PDBLoader
 from topoppi.json_utils import dump_json_atomic
 from topoppi.mesh.parameterization import Parameterizer
@@ -41,6 +44,23 @@ from topoppi.visualization.visualizer import InterfaceVisualizer, select_patches
 logger = logging.getLogger("topoppi.pipeline")
 
 _SUPPORTED_OUTPUT_SUFFIXES = frozenset({".png", ".tif", ".tiff", ".pdf", ".svg"})
+
+
+def layout_interface(prepared, *, side=0, optcuts=None, parameterization=None, cancel_event=None, log=None):
+    """Lay out one prepared side, leaving the shared native geometry untouched."""
+    from topoppi.config import DEFAULT_RUN_CONFIG, ParameterizationConfig
+
+    log = log or logger
+    config = TopoPPIRunConfig(pdb_file=prepared.source["path"],
+        chain_a=",".join(prepared.partners[side].chains), chain_b=",".join(prepared.partners[1-side].chains),
+        optcuts=optcuts or DEFAULT_RUN_CONFIG.optcuts, parameterization=parameterization or ParameterizationConfig())
+    optimizer = OptCutsUVOptimizer(config.optcuts, cancel_event=cancel_event)
+    artifact = optimizer.preflight_binary()
+    patches = _parameterize_patches(prepared.partners[side].layout_patches(), config, log)
+    report = _optimize_patches(patches, optimizer, prepared.chain_data(side), config, log,
+        interaction_partner_map=prepared.contacts(side), interaction_source="geometric")
+    report["optcuts_resolved"] = artifact
+    return patches, report
 
 
 @dataclass
@@ -82,14 +102,8 @@ def run_interface_mapping(config: TopoPPIRunConfig, log: Optional[logging.Logger
         except (OSError, ValueError) as exc:
             raise PipelineError(f"Invalid footprint annotations: {exc}") from exc
 
-    optimizer = OptCutsUVOptimizer(config.optcuts)
-    try:
-        optcuts_artifact = optimizer.preflight_binary()
-    except RuntimeError as exc:
-        raise PipelineError(str(exc)) from exc
-
     input_sha256 = sha256_file(config.pdb_file)
-    prolif_file = _resolve_prolif_file(config, log, input_sha256=input_sha256)
+    prolif_file = _resolve_prolif_file(config, log, input_sha256=input_sha256, chain_data=chain_data)
     coords_a, _atoms_a, coords_b, _atoms_b = chain_data
     interaction_partners, interaction_source = _build_interaction_partner_map(
         chain_data,
@@ -98,8 +112,19 @@ def run_interface_mapping(config: TopoPPIRunConfig, log: Optional[logging.Logger
         log,
         input_sha256=input_sha256,
     )
-    mesh_a, surface_report = _generate_surface(coords_a, config, log)
-    patches, topology_report = _extract_patches(mesh_a, coords_b, config, log)
+    prepared = prepare_interface(config.pdb_file, config.chain_a, config.chain_b,
+        surface=config.surface, topology=config.topology, sides=(0,), chain_data=chain_data, log=log.info)
+    partner = prepared.partners[0]
+    surface_report, topology_report = partner.surface_report, partner.topology_report
+    patches = partner.layout_patches()
+    if not patches:
+        raise PipelineError("No interface patches retained; check the chain pair and --cutoff.")
+    optimizer = OptCutsUVOptimizer(config.optcuts)
+    try:
+        optcuts_artifact = optimizer.preflight_binary()
+    except RuntimeError as exc:
+        raise PipelineError(str(exc)) from exc
+
     valid_patches = _parameterize_patches(patches, config, log)
     optimizer_report = _optimize_patches(
         valid_patches,
@@ -120,7 +145,7 @@ def run_interface_mapping(config: TopoPPIRunConfig, log: Optional[logging.Logger
         interaction_partner_map=interaction_partners,
         interaction_source=interaction_source,
         run_metadata={"optimizer_report": optimizer_report, "surface_generation": surface_report,
-                      "topology_extraction": topology_report},
+                      "topology_extraction": topology_report, "interface": prepared.metadata()},
     )
 
     elapsed = time.perf_counter() - start_time
@@ -166,29 +191,37 @@ def _resolve_prolif_file(
     log: logging.Logger,
     *,
     input_sha256: str,
+    chain_data=None,
 ) -> Optional[str]:
     if config.interaction_source == "geometric":
         return None
     if config.prolif_file:
         return config.prolif_file
     try:
-        generated = generate_prolif_interactions(
+        generate = generate_prolif_interactions if config.interaction_source == "prolif" else generate_interactions
+        options = {} if config.interaction_source == "prolif" else {"backend": config.interaction_source}
+        if chain_data is not None:
+            options["chain_data"] = chain_data
+        generated = generate(
             config.pdb_file,
             config.chain_a,
             config.chain_b,
             log,
             source_sha256=input_sha256,
             output_dir=str(Path(config.output_file).parent),
+            **options,
         )
         return generated
     except Exception as exc:
+        backend_label = "ProLIF" if config.interaction_source == "prolif" else config.interaction_source
         if config.visualization.use_geometric_interaction_fallback:
             log.warning(
-                "ProLIF interaction generation failed (%s); using the selected geometric fallback.",
+                "%s interaction generation failed (%s); using the selected geometric fallback.",
+                backend_label,
                 exc,
             )
             return None
-        raise PipelineError(f"ProLIF interaction generation failed: {exc}") from exc
+        raise PipelineError(f"{backend_label} interaction generation failed: {exc}") from exc
 
 
 def _load_chain_data(config: TopoPPIRunConfig, log: logging.Logger):
@@ -231,7 +264,7 @@ def _build_interaction_partner_map(
     coords_a, atoms_a, coords_b, atoms_b = chain_data
     if prolif_file and config.interaction_source != "geometric":
         try:
-            partners = load_prolif_partner_map(
+            partners = load_interaction_partner_map(
                 prolif_file,
                 atoms_a,
                 atoms_b,
@@ -240,18 +273,21 @@ def _build_interaction_partner_map(
                 expected_source_sha256=input_sha256,
             )
         except (OSError, ValueError) as exc:
-            raise PipelineError(f"Failed to resolve ProLIF interaction residues: {exc}") from exc
+            raise PipelineError(f"Failed to resolve interaction residues: {exc}") from exc
         if not partners:
             raise PipelineError(
-                "ProLIF did not yield any Chain-A/Chain-B interaction residue pairs "
+                "The interaction document did not yield any Chain-A/Chain-B residue pairs "
                 "that resolve against the selected structure."
             )
+        payload, _, _ = load_interaction_document(prolif_file)
+        source = str(payload.get("engine") or config.interaction_source)
         log.info(
-            "ProLIF interaction definition: %d Chain-A residues, %d residue pairs.",
+            "%s interaction definition: %d Chain-A residues, %d residue pairs.",
+            source,
             len(partners),
             sum(len(values) for values in partners.values()),
         )
-        return partners, "prolif"
+        return partners, source
 
     cutoff = float(config.contact_distance_angstrom)
     partners = geometric_contact_partner_map(
@@ -358,8 +394,8 @@ def _optimize_patches(
         raise PipelineError(f"OptCuts optimization failed: {exc}") from exc
     report = optimizer.get_last_report()
     weight_definition = (
-        "distinct Chain-B residues paired with each Chain-A residue in ProLIF records"
-        if interaction_source == "prolif"
+        f"distinct Chain-B residues paired with each Chain-A residue in {interaction_source} records"
+        if interaction_source not in {"geometric", "geometric_fallback"}
         else (
             "distinct Chain-B residues with any heavy-atom pair at distance <= "
             f"{float(config.contact_distance_angstrom):g} Angstrom "

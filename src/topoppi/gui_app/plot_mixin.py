@@ -1,6 +1,6 @@
 import tkinter as tk
 from copy import deepcopy
-from tkinter import colorchooser, messagebox
+from tkinter import colorchooser, messagebox, ttk
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -10,7 +10,31 @@ from topoppi.errors import ConfigurationError
 from topoppi.visualization.visualizer import select_patches_for_display
 
 
+class _MapToolbar(NavigationToolbar2Tk):
+    """Keep the visible navigation controls in step with Matplotlib's modes."""
+
+    def __init__(self, *args, on_mode_changed, **kwargs):
+        self.on_mode_changed = on_mode_changed
+        super().__init__(*args, **kwargs)
+
+    def pan(self, *args):
+        super().pan(*args)
+        self.on_mode_changed()
+
+    def zoom(self, *args):
+        super().zoom(*args)
+        self.on_mode_changed()
+
+
 class PlotMixin:
+    def _set_display_feedback(self, message):
+        if hasattr(self, "display_feedback_var"):
+            self.display_feedback_var.set(message)
+            if message:
+                self.display_feedback_label.pack(fill=tk.X, pady=(5, 0))
+            else:
+                self.display_feedback_label.pack_forget()
+
     def redraw_plot(self):
         if self._busy:
             self.log("The current run will use its saved display settings.")
@@ -25,7 +49,10 @@ class PlotMixin:
         try:
             style = self.get_style_config()
         except (ValueError, ConfigurationError) as exc:
+            self._set_display_feedback(f"{exc} Adjust Appearance, then choose Apply Style.")
             self.log(f"Could not update style: {exc}")
+            return
+        if self._extensions_redraw(style):
             return
         self.log("Updating plot style...")
         self.update_plot(
@@ -44,6 +71,7 @@ class PlotMixin:
                 style[key] = dict(pending["style"].get(key, {}))
         except (ValueError, ConfigurationError) as exc:
             self._finish_task()
+            self._set_display_feedback(f"{exc} Adjust Appearance, then choose Apply Style to display the computed map.")
             self.log(f"Calculation complete. Adjust the display settings and apply the style: {exc}")
             return False
         return self.update_plot(
@@ -53,7 +81,7 @@ class PlotMixin:
         )
 
     def on_pick(self, event):
-        if self._surface_view() is not None:
+        if self._plot_navigation_active() or self._surface_view() is not None:
             return
         artist = event.artist
         if not isinstance(artist, (PathCollection, PolyCollection)) or self._busy or self._pending_single_run is not None:
@@ -62,6 +90,13 @@ class PlotMixin:
         successful_run = self._successful_single_run
         viz = successful_run["viz"] if successful_run else None
         if gid and viz and gid in viz.artist_map:
+            if self.var_select_binding_residues.get():
+                key = viz.artist_map[gid]["residue_key"]
+                if (getattr(event.mouseevent, "button", None) == 1
+                        and getattr(event.mouseevent, "_binding_selected_key", None) != key):
+                    event.mouseevent._binding_selected_key = key
+                    self._toggle_binding_residue(key)
+                return
             if isinstance(artist, PolyCollection) and viz.last_style.get("annotation_values") is not None:
                 self.log("Numeric annotations control region colors. Clear annotations to recolor residues.")
                 return
@@ -104,6 +139,9 @@ class PlotMixin:
         return scatter.get_offsets()[0] if scatter is not None else None
 
     def on_mouse_press(self, event):
+        if self._plot_navigation_active():
+            self._drag_state = None
+            return
         successful_run = self._successful_single_run
         if self._busy or self._pending_single_run is not None or successful_run is None or not event.inaxes:
             return
@@ -111,7 +149,15 @@ class PlotMixin:
         if surface is not None:
             self._drag_state = None
             if getattr(event, "dblclick", False) and event.button == 1:
-                self._recolor_surface_residue(surface, event)
+                if self.var_select_binding_residues.get():
+                    gid = surface["pick_residue"](event)
+                    if gid in successful_run["viz"].artist_map:
+                        self._toggle_binding_residue(successful_run["viz"].artist_map[gid]["residue_key"])
+                else:
+                    self._recolor_surface_residue(surface, event)
+            return
+        if self.var_select_binding_residues.get():
+            self._drag_state = None
             return
         for gid, objs in successful_run["viz"].artist_map.items():
             txt = objs.get("text")
@@ -123,7 +169,7 @@ class PlotMixin:
                 break
 
     def on_mouse_move(self, event):
-        if self._surface_view() is not None:
+        if self._plot_navigation_active() or self._surface_view() is not None:
             return
         if not self._drag_state or not event.inaxes or event.xdata is None or event.ydata is None:
             return
@@ -212,6 +258,7 @@ class PlotMixin:
         run_params=None,
         run_manifest=None,
         all_patches=None,
+        preserve_selection=False,
     ):
         previous_render = {name: getattr(viz, name, None) for name in
                            ("artist_map", "last_style", "last_report", "capture_surface_camera")}
@@ -229,6 +276,7 @@ class PlotMixin:
         except Exception as exc:
             for name, value in previous_render.items():
                 setattr(viz, name, value)
+            self._set_display_feedback(f"Display update needs attention: {exc} Adjust Appearance, then choose Apply Style.")
             if complete_task:
                 pending = getattr(self, "_pending_single_run", None)
                 message = (
@@ -244,6 +292,11 @@ class PlotMixin:
         annotation = dict(viz.last_report)
 
         old_fig = self.current_fig
+        previous_focus = self.root.focus_get()
+        self._binding_selection_artists = []
+        if complete_task and not preserve_selection:
+            self._binding_selection.clear()
+        self._cancel_pending_canvas_draw()
         for widget in self.canvas_frame.winfo_children():
             widget.destroy()
         if old_fig is not None and old_fig is not fig:
@@ -255,10 +308,23 @@ class PlotMixin:
         toolbar_frame = tk.Frame(self.canvas_frame, bg="#ffffff")
         toolbar_frame.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(4, 0))
         hidden_toolbar = tk.Frame(self.canvas_frame)
-        self.current_toolbar = NavigationToolbar2Tk(self.current_canvas, hidden_toolbar, pack_toolbar=False)
+        self.current_toolbar = _MapToolbar(self.current_canvas, hidden_toolbar, pack_toolbar=False,
+                                           on_mode_changed=self._sync_plot_navigation)
         self.current_toolbar.update()
         self._build_plot_toolbar(toolbar_frame)
         self.current_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        # TkAgg requests focus before mapping. Restore the live form control
+        # when that request actually arrives, keeping Tab in the settings.
+        if not complete_task and previous_focus is not None and previous_focus.winfo_exists():
+            canvas_widget = self.current_canvas.get_tk_widget()
+
+            def restore_control_focus(_event):
+                canvas_widget.unbind("<FocusIn>", restore_binding)
+                if previous_focus.winfo_exists():
+                    previous_focus.focus_set()
+
+            restore_binding = canvas_widget.bind("<FocusIn>", restore_control_focus, add="+")
+        self.current_canvas.mpl_connect("resize_event", self._fit_plot_header)
         self.current_canvas.mpl_connect("pick_event", self.on_pick)
         self.current_canvas.mpl_connect("button_press_event", self.on_mouse_press)
         self.current_canvas.mpl_connect("motion_notify_event", self.on_mouse_move)
@@ -275,6 +341,7 @@ class PlotMixin:
                 "log": list(self.current_run_log),
                 "style": dict(viz.last_style),
                 "viz": viz,
+                "geometry": self._pending_single_run.get("geometry") if self._pending_single_run else None,
             }
             self._successful_single_run = successful_run
             self._pending_single_run = None
@@ -289,6 +356,13 @@ class PlotMixin:
                     self._auto_save_current_figure(successful_run)
                 except Exception as exc:
                     self.log(f"Auto-save failed: {exc}")
+                    messagebox.showwarning(
+                        "Automatic save incomplete",
+                        "The map is ready in this window, but automatic saving did not finish.\n\n"
+                        "Use Save Figure or Save Atlas to save your result before closing.\n"
+                        f"Choose a writable folder with enough free space.\n\nDetails: {exc}",
+                        parent=self.root,
+                    )
         else:
             successful_run = self._successful_single_run
             successful_run["figure"] = fig
@@ -298,6 +372,9 @@ class PlotMixin:
             successful_run["style"] = dict(viz.last_style)
             self._refresh_action_states()
         annotation = viz.last_report
+        self._set_display_feedback("")
+        self._update_map_context()
+        self._show_binding_selection()
         interaction_source = str(annotation.get("interaction_residue_source", "interaction"))
         source_label = {"prolif": "ProLIF", "geometric": "geometric", "geometric_fallback": "geometric"}.get(
             interaction_source, "recorded"
@@ -310,6 +387,19 @@ class PlotMixin:
         )
         return True
 
+    def _fit_plot_header(self, event):
+        figure = event.canvas.figure
+        if figure is not self.current_fig or not figure.legends or getattr(figure, "_topoppi_surface", None):
+            return
+        renderer = event.canvas.get_renderer()
+        legend_height = max(legend.get_window_extent(renderer).height for legend in figure.legends)
+        top = max(.35, 1 - (legend_height + 12) / max(1, figure.bbox.height))
+        figure.tight_layout(rect=(0, 0, 1, top))
+        event.canvas.draw_idle()
+
+    def _plot_navigation_active(self):
+        return bool(getattr(getattr(self, "current_toolbar", None), "mode", ""))
+
     def _build_plot_toolbar(self, parent):
         surface = self._surface_view() is not None
         actions = [
@@ -321,16 +411,54 @@ class PlotMixin:
         ]
         controls = tk.Frame(parent, bg="#ffffff")
         controls.pack(anchor=tk.W)
+        self.plot_navigation_buttons = {}
         for label, command in actions:
-            tk.Button(controls, text=label, command=command, relief=tk.FLAT, padx=8, pady=2).pack(
-                side=tk.LEFT, padx=(0, 4)
-            )
-        hint = ("Drag to rotate; double-click a residue to change its color." if surface
-                else "Drag labels to move them; click residues to change colors.")
-        tk.Label(parent, text=hint,
-                 bg="#ffffff", fg="#52616B", font=(self.config.font_family, 9)).pack(anchor=tk.W)
+            button = tk.Button(controls, text=label, command=command, relief=tk.FLAT, padx=8, pady=2)
+            button.pack(side=tk.LEFT, padx=(0, 4))
+            if label in {"Pan", "Zoom"}:
+                self.plot_navigation_buttons[label] = button
+        selection = ttk.Frame(parent)
+        selection.pack(anchor=tk.W, pady=(4, 0))
+        ttk.Checkbutton(selection, text="Select residues", variable=self.var_select_binding_residues,
+                        command=self._sync_plot_navigation).pack(side=tk.LEFT)
+        ttk.Label(selection, textvariable=self.binding_selection_label).pack(side=tk.LEFT, padx=8)
+        self.btn_create_selected_variants = ttk.Button(selection, text="Create variants...", command=self._create_selected_variants)
+        self.btn_create_selected_variants.pack(side=tk.LEFT)
+        ttk.Button(selection, text="Clear", command=self._clear_binding_selection).pack(side=tk.LEFT, padx=4)
+        self.plot_navigation_hint = tk.StringVar()
+        tk.Label(parent, textvariable=self.plot_navigation_hint, wraplength=430, justify=tk.LEFT,
+                 bg="#ffffff", fg="#52616B").pack(anchor=tk.W)
+        self._sync_plot_navigation()
+
+    def _sync_plot_navigation(self, *_args):
+        mode = str(self.current_toolbar.mode)
+        for label, button in self.plot_navigation_buttons.items():
+            selected = bool(mode) and ((label == "Pan" and mode == "pan/zoom")
+                                       or (label == "Zoom" and mode == "zoom rect"))
+            button.configure(relief=tk.SUNKEN if selected else tk.FLAT,
+                             background="#dbe9f5" if selected else "#ffffff")
+        if mode:
+            self._drag_state = None
+            hint = ("Pan active: drag to move the view. Click Pan again to edit residues." if mode == "pan/zoom"
+                    else "Zoom active: drag a rectangle. Click Zoom again to edit residues.")
+        else:
+            if self.var_select_binding_residues.get():
+                hint = ("Double-click residues to select or deselect; drag to rotate." if self._surface_view() is not None
+                        else "Click residues to select or deselect them. Orange rings mark your selection.")
+            else:
+                hint = ("Drag to rotate; double-click a residue to change its color." if self._surface_view() is not None
+                        else "Drag labels to move them; click residues to change colors.")
+        self.plot_navigation_hint.set(hint)
+
+    def _cancel_pending_canvas_draw(self):
+        canvas = self.current_canvas
+        pending = getattr(canvas, "_idle_draw_id", None)
+        if pending:
+            canvas.get_tk_widget().after_cancel(pending)
+            canvas._idle_draw_id = None
 
     def _close_current_figure(self):
+        self._cancel_pending_canvas_draw()
         if self.current_fig is not None:
             plt.close(self.current_fig)
             self.current_fig = None
@@ -341,4 +469,6 @@ class PlotMixin:
         self._restore_display_highlights()
         self._finish_task()
         self.log(f"Error: {msg}")
+        self.var_show_activity.set(True)
+        self._toggle_activity()
         messagebox.showerror("Pipeline Error", msg)

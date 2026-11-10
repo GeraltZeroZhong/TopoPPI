@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\TopoPPI",
-    [string]$Version = "2.1",
+    [string]$Version = "3.0.0",
     [string]$PackageSpec = "",
     [string]$MicromambaUrl = "https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-win-64"
 )
@@ -120,7 +120,7 @@ try {
     Write-Step "Verifying ProLIF interaction stack"
     Invoke-External $Python @(
         "-c",
-        "import MDAnalysis, prolif, rdkit; print('ProLIF interaction stack ready')"
+        "import MDAnalysis, prolif, rdkit, topoppi; assert 'chemistry.detect' in topoppi.plugins.info('chemistry').capabilities; print('ProLIF interaction stack ready')"
     )
 
     Write-Step "Installing Windows OptCuts artifact"

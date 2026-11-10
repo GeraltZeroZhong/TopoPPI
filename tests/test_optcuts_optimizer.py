@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -13,7 +14,7 @@ from topoppi.atlas.uv import set_uv_layout
 from topoppi.config import OptCutsConfig, ParameterizationConfig
 from topoppi.mesh.parameterization import Parameterizer
 from topoppi.mesh.provenance import OPTCUTS_GEOMETRY_VERTEX_IDS, initialize_provenance
-from topoppi.optimization.optcuts.joint_optimizer import OptCutsUVOptimizer
+from topoppi.optimization.optcuts.joint_optimizer import OptCutsUVOptimizer, resolve_optcuts_binary
 
 OPTCUTS_BIN = Path(__file__).parents[1] / "tools" / "OptCuts" / "OptCuts_bin"
 RESIDUE_AWARE_OPTCUTS_BIN = Path(__file__).parents[1] / "tools" / "OptCuts" / "OptCuts_bin"
@@ -40,6 +41,7 @@ class OptCutsOptimizerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "OptCuts_bin"
             binary.write_bytes(b"binary")
+            binary.chmod(0o755)
             optimizer = OptCutsUVOptimizer(replace(OptCutsConfig(), optcuts_bin=str(binary)))
             with patch(
                 "topoppi.optimization.optcuts.joint_optimizer.sha256_file",
@@ -55,6 +57,7 @@ class OptCutsOptimizerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "OptCuts_bin"
             binary.write_bytes(b"residue footprint energy enabled")
+            binary.chmod(0o755)
             optimizer = OptCutsUVOptimizer(
                 replace(
                     OptCutsConfig(),
@@ -84,6 +87,88 @@ class OptCutsOptimizerTests(unittest.TestCase):
         self.assertIn("topoppi-install-optcuts", message)
         self.assertIn("TOPOPPI_OPTCUTS_BIN", message)
         self.assertIn("native OptCuts executable", message)
+
+    def test_default_binary_is_found_in_source_checkout_outside_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp) / "checkout"
+            filename = "OptCuts_bin.exe" if os.name == "nt" else "OptCuts_bin"
+            binary = checkout / "tools" / "OptCuts" / filename
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"binary")
+            module = checkout / "src" / "topoppi" / "optimization" / "optcuts" / "joint_optimizer.py"
+            with (
+                patch.dict("topoppi.optimization.optcuts.joint_optimizer.os.environ", {}, clear=True),
+                patch("topoppi.optimization.optcuts.joint_optimizer.shutil.which", return_value=None),
+                patch("topoppi.optimization.optcuts.joint_optimizer.__file__", str(module)),
+                patch("topoppi.optimization.optcuts.joint_optimizer.sys.executable", str(Path(tmp) / "python")),
+                patch("topoppi.optimization.optcuts.joint_optimizer.default_install_dir", return_value=Path(tmp) / "bin"),
+            ):
+                self.assertEqual(resolve_optcuts_binary(OptCutsConfig()), str(binary))
+                missing = replace(OptCutsConfig(), optcuts_bin=str(Path(tmp) / "missing"))
+                self.assertIsNone(resolve_optcuts_binary(missing))
+
+    def test_explicit_binary_overrides_environment_and_reports_its_own_missing_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            environmental, explicit = Path(tmp) / "environmental", Path(tmp) / "explicit"
+            environmental.write_bytes(b"binary")
+            explicit.write_bytes(b"binary")
+            with patch.dict(os.environ, {"TOPOPPI_OPTCUTS_BIN": str(environmental)}):
+                self.assertEqual(resolve_optcuts_binary(OptCutsConfig()), str(environmental))
+                config = replace(OptCutsConfig(), optcuts_bin=str(explicit))
+                self.assertEqual(resolve_optcuts_binary(config), str(explicit))
+                explicit.unlink()
+                self.assertIsNone(resolve_optcuts_binary(config))
+                with self.assertRaisesRegex(RuntimeError, str(explicit)):
+                    OptCutsUVOptimizer(config).preflight_binary()
+
+    def test_automatic_discovery_prefers_residue_capability_and_respects_explicit_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            filename = "OptCuts_bin.exe" if os.name == "nt" else "OptCuts_bin"
+            plain = Path(tmp) / "bin" / filename
+            plain.parent.mkdir()
+            plain.write_bytes(b"ordinary OptCuts")
+            checkout = Path(tmp) / "checkout"
+            patched = checkout / "tools" / "OptCuts" / filename
+            patched.parent.mkdir(parents=True)
+            patched.write_bytes(b"residue footprint energy enabled")
+            module = checkout / "src" / "topoppi" / "optimization" / "optcuts" / "joint_optimizer.py"
+            config = replace(OptCutsConfig(), residue_fragmentation_weight=20.0)
+            with (
+                patch.dict("topoppi.optimization.optcuts.joint_optimizer.os.environ", {}, clear=True),
+                patch("topoppi.optimization.optcuts.joint_optimizer.shutil.which", return_value=str(plain)),
+                patch("topoppi.optimization.optcuts.joint_optimizer.__file__", str(module)),
+                patch("topoppi.optimization.optcuts.joint_optimizer.sys.executable", str(plain.parent / "python")),
+                patch("topoppi.optimization.optcuts.joint_optimizer.default_install_dir", return_value=plain.parent),
+            ):
+                self.assertEqual(resolve_optcuts_binary(config), str(patched))
+                self.assertEqual(resolve_optcuts_binary(replace(config, optcuts_bin=str(plain))), str(plain))
+                with patch.dict("topoppi.optimization.optcuts.joint_optimizer.os.environ", {"TOPOPPI_OPTCUTS_BIN": str(plain)}):
+                    self.assertEqual(resolve_optcuts_binary(config), str(plain))
+
+    def test_default_binary_is_found_in_installer_directory_without_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            filename = "OptCuts_bin.exe" if os.name == "nt" else "OptCuts_bin"
+            binary = Path(tmp) / filename
+            binary.write_bytes(b"binary")
+            with (
+                patch.dict("topoppi.optimization.optcuts.joint_optimizer.os.environ", {}, clear=True),
+                patch("topoppi.optimization.optcuts.joint_optimizer.shutil.which", return_value=None),
+                patch("topoppi.optimization.optcuts.joint_optimizer.sys.executable", str(Path(tmp) / "other" / "python")),
+                patch("topoppi.optimization.optcuts.joint_optimizer.default_install_dir", return_value=Path(tmp)),
+            ):
+                self.assertEqual(resolve_optcuts_binary(OptCutsConfig()), str(binary))
+                with patch.dict("topoppi.optimization.optcuts.joint_optimizer.os.environ", {"TOPOPPI_OPTCUTS_BIN": "missing-choice"}):
+                    self.assertIsNone(resolve_optcuts_binary(OptCutsConfig()))
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable permission")
+    def test_preflight_reports_nonexecutable_binary_before_optimization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "OptCuts_bin"
+            binary.write_bytes(b"binary")
+            binary.chmod(0o644)
+            optimizer = OptCutsUVOptimizer(replace(OptCutsConfig(), optcuts_bin=str(binary)))
+            with self.assertRaisesRegex(RuntimeError, "not executable"):
+                optimizer.preflight_binary()
 
     def test_frame_resize_targets_the_long_edge(self):
         image = Image.new("RGB", (100, 50))
@@ -593,7 +678,7 @@ f 1/4 2/5 3/6
                     residue_fragmentation_weight=1.0,
                 )
             )
-            with self.assertRaisesRegex(RuntimeError, "does not expose residue-footprint"):
+            with self.assertRaisesRegex(RuntimeError, "does not support residue-aware layouts"):
                 optimizer.optimize_patches(
                     [mesh],
                     initialization="provided",

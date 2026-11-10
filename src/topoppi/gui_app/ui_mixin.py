@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import os
 import re
@@ -11,9 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, scrolledtext, ttk
 
-from topoppi import __version__
+from topoppi import __version__, plugins
 from topoppi.config import DEFAULT_BENCHMARK_CONFIG, DEFAULT_RUN_CONFIG
-from topoppi.errors import ConfigurationError
+from topoppi.errors import ConfigurationError, PluginError
 from topoppi.file_utils import sha256_file
 from topoppi.json_utils import dump_json_atomic
 
@@ -21,13 +22,42 @@ from .constants import INTERACTION_COLORS
 from .forms import parse_benchmark_form, parse_single_run_form
 
 
+def interaction_sources():
+    """Read installed backend names without importing chemical implementations."""
+    try:
+        backends = plugins.run("chemistry.backends") if plugins.available("chemistry") else ()
+    except PluginError as exc:
+        logging.getLogger("topoppi.gui").warning("Chemical backend discovery failed: %s", exc)
+        backends = ()
+    return (*backends, "geometric")
+
+
 class UIMixin:
     def _init_menu(self):
         menu = tk.Menu(self.root)
+        shortcut_modifier = "Command" if self.root.tk.call("tk", "windowingsystem") == "aqua" else "Control"
+        shortcut_label = "Cmd" if shortcut_modifier == "Command" else "Ctrl"
+        self.file_menu = tk.Menu(menu, tearoff=False)
+        self.file_menu.add_command(label="Choose Structure...", command=self.browse_file, accelerator=f"{shortcut_label}+O")
+        self.file_menu.add_command(label="Try 1BVK Example...", command=self.load_example)
+        self.file_menu.add_command(label="Open Atlas...", command=self.open_atlas)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Save Figure...", command=self.save_figure, accelerator=f"{shortcut_label}+S")
+        self.file_menu.add_command(label="Save Atlas...", command=self.save_atlas)
+        menu.add_cascade(label="File", menu=self.file_menu)
+        self.root.bind(f"<{shortcut_modifier}-o>", lambda _event: self.browse_file())
+        self.root.bind(f"<{shortcut_modifier}-s>", lambda _event: self.btn_save.invoke())
+        analysis_menu = tk.Menu(menu, tearoff=False)
+        analysis_menu.add_command(label="Saved metadata...", command=self.show_saved_metadata)
+        self.analysis_menu = analysis_menu
+        menu.add_cascade(label="Analysis", menu=analysis_menu)
+        plugin_menu = tk.Menu(menu, tearoff=False)
+        plugin_menu.add_command(label="Manage Plugins...", command=self.show_plugins)
+        menu.add_cascade(label="Plugins", menu=plugin_menu)
         help_menu = tk.Menu(menu, tearoff=False)
         help_menu.add_command(
             label="User guide",
-            command=lambda: webbrowser.open("https://github.com/GeraltZeroZhong/TopoPPI#readme"),
+            command=lambda: webbrowser.open("https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/docs/desktop.md"),
         )
         help_menu.add_command(
             label="Report an issue",
@@ -74,24 +104,23 @@ class UIMixin:
 
         self._init_settings_tabs()
         self._init_basic_input_controls(self.basic_tab)
-        self._init_footprint_controls(self.basic_tab)
-        self._init_interaction_controls(self.basic_tab)
+        self._init_footprint_controls(self.appearance_tab)
+        self._init_interaction_controls(self.appearance_tab)
         self._init_mode_controls(self.advanced_tab)
         self._init_advanced_input_controls(self.advanced_tab)
         self._init_core_controls(self.advanced_tab)
         self._init_benchmark_controls(self.advanced_tab)
         self._init_optcuts_controls(self.advanced_tab)
-        self._init_label_layout_controls(self.advanced_tab)
+        self._init_label_layout_controls(self.appearance_tab)
         self.apply_style_preset()
         self._init_run_summary()
         self._init_run_controls()
-        self._init_log_panel()
         self.toggle_color_mode(mark_custom=False)
 
     def _init_settings_tabs(self):
         self.var_input_path = tk.StringVar(value="")
         self.var_prolif_path = tk.StringVar(value="")
-        self.var_interaction_source = tk.StringVar(value="prolif")
+        self.var_interaction_source = tk.StringVar(value=DEFAULT_RUN_CONFIG.interaction_source)
         self.var_chain_a = tk.StringVar(value=str(DEFAULT_RUN_CONFIG.chain_a))
         self.var_chain_b = tk.StringVar(value=str(DEFAULT_RUN_CONFIG.chain_b))
         self.var_output_dir = tk.StringVar(value="")
@@ -102,26 +131,19 @@ class UIMixin:
         self.var_settings_page = tk.StringVar(value="basic")
         tab_bar = ttk.Frame(self.left_frame)
         tab_bar.pack(fill=tk.X, pady=(0, 5))
-        ttk.Radiobutton(
-            tab_bar,
-            text="Basic",
-            value="basic",
-            variable=self.var_settings_page,
-            command=self._sync_settings_page,
-        ).pack(side=tk.LEFT)
-        ttk.Radiobutton(
-            tab_bar,
-            text="Advanced",
-            value="advanced",
-            variable=self.var_settings_page,
-            command=self._sync_settings_page,
-        ).pack(side=tk.LEFT, padx=(12, 0))
+        for text, value in (("Setup", "basic"), ("Appearance", "appearance"), ("Advanced", "advanced")):
+            ttk.Radiobutton(tab_bar, text=text, value=value, variable=self.var_settings_page,
+                            style="Page.Toolbutton", command=self._sync_settings_page).pack(
+                                side=tk.LEFT, fill=tk.X, expand=True, padx=1)
 
         self.settings_page_container = ttk.Frame(self.left_frame)
         self.settings_page_container.pack(fill=tk.X)
         self.basic_tab = ttk.Frame(self.settings_page_container)
+        self.appearance_tab = ttk.Frame(self.settings_page_container)
         self.advanced_tab = ttk.Frame(self.settings_page_container)
         self.basic_tab.pack(fill=tk.X)
+        ttk.Label(self.appearance_tab, text="Adjust the current view. Display changes reuse the computed interface.",
+                  style="Muted.TLabel", wraplength=self.config.sidebar_width - 70).pack(fill=tk.X, pady=5)
 
     def _track_prolif_override_context(self):
         for variable in (self.var_input_path, self.var_chain_a, self.var_chain_b):
@@ -139,15 +161,11 @@ class UIMixin:
             self._update_map_context()
 
     def _sync_settings_page(self):
-        self.basic_tab.pack_forget()
-        self.advanced_tab.pack_forget()
-        if self.var_settings_page.get() == "advanced":
-            self.advanced_tab.pack(fill=tk.X)
-        else:
-            self.basic_tab.pack(fill=tk.X)
-        if self.var_settings_page.get() == "basic" and self.var_run_mode.get() == "benchmark":
-            self.var_run_mode.set("single")
-            self._sync_mode_controls()
+        pages = {"basic": self.basic_tab, "appearance": self.appearance_tab, "advanced": self.advanced_tab}
+        for page in pages.values():
+            page.pack_forget()
+        pages.get(self.var_settings_page.get(), self.basic_tab).pack(fill=tk.X)
+        self.sidebar_canvas.yview_moveto(0)
 
     def _init_mode_controls(self, parent):
         frame = ttk.LabelFrame(parent, text="Run Mode", padding=10)
@@ -169,7 +187,7 @@ class UIMixin:
         ).pack(side=tk.LEFT, padx=(12, 0))
 
     def _init_basic_input_controls(self, parent):
-        frame = ttk.LabelFrame(parent, text="Input", padding=10)
+        frame = ttk.LabelFrame(parent, text="1. Structure", padding=10)
         frame.pack(fill=tk.X, pady=5)
         frame.columnconfigure(0, weight=1)
 
@@ -178,11 +196,16 @@ class UIMixin:
         self.entry_file = ttk.Entry(frame, textvariable=self.var_input_path)
         self.entry_file.grid(row=1, column=0, sticky=tk.EW, pady=(2, 0))
         self._bind_field_update(self.entry_file)
-        ttk.Button(frame, text="File...", width=9, command=self.browse_file).grid(
-            row=1, column=1, padx=(6, 0), pady=(2, 0)
-        )
+        self.entry_file.bind("<Return>", self._commit_structure_path)
+        self.entry_file.bind("<FocusOut>", self._commit_structure_path)
+        self.btn_browse_input = ttk.Button(frame, text="File...", width=9, command=self.browse_input)
+        self.btn_browse_input.grid(row=1, column=1, padx=(6, 0), pady=(2, 0))
 
-        ttk.Label(frame, text="Recent input").grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        self.btn_example = ttk.Button(frame, text="Try 1BVK Example...", style="Tool.TButton",
+                                      command=self.load_example)
+        self.btn_example.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        self.lbl_recent_file = ttk.Label(frame, text="Recent input")
+        self.lbl_recent_file.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
         self.combo_recent_file = ttk.Combobox(
             frame,
             values=self.recent_files,
@@ -191,8 +214,11 @@ class UIMixin:
         )
         self.combo_recent_file.grid(row=4, column=0, columnspan=2, sticky=tk.EW, pady=(2, 0))
         self.combo_recent_file.bind("<<ComboboxSelected>>", self._select_recent_file)
+        if not self.recent_files:
+            self.lbl_recent_file.grid_remove()
+            self.combo_recent_file.grid_remove()
 
-        chain_frame = ttk.LabelFrame(parent, text="Chains", padding=10)
+        chain_frame = ttk.LabelFrame(parent, text="2. Interface chains", padding=10)
         chain_frame.pack(fill=tk.X, pady=5)
         chain_frame.columnconfigure(1, weight=1)
         self.combo_basic_chain_a = self._chain_row(
@@ -202,7 +228,7 @@ class UIMixin:
             chain_frame, 1, "Partner chain", DEFAULT_RUN_CONFIG.chain_b, variable=self.var_chain_b
         )
         self.btn_swap_chains_basic = ttk.Button(
-            chain_frame, text="Swap A/B", style="Tool.TButton", command=self.swap_chains
+            chain_frame, text="Swap", style="Tool.TButton", command=self.swap_chains
         )
         self.btn_swap_chains_basic.grid(row=0, column=2, rowspan=2, sticky=tk.NS, padx=(6, 0), pady=3)
         self.chain_preview_var = tk.StringVar(value="Select a structure to detect chains.")
@@ -212,8 +238,11 @@ class UIMixin:
             style="Muted.TLabel",
             wraplength=self.config.sidebar_width - 86,
         ).grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(6, 0))
+        ttk.Label(chain_frame, text="Map the surface chain where it contacts the partner chain.",
+                  style="Muted.TLabel", wraplength=self.config.sidebar_width - 86).grid(
+                      row=3, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
 
-        output_frame = ttk.LabelFrame(parent, text="Output", padding=10)
+        output_frame = ttk.LabelFrame(parent, text="3. Output folder", padding=10)
         output_frame.pack(fill=tk.X, pady=5)
         output_frame.columnconfigure(0, weight=1)
         ttk.Label(output_frame, text="Save figures and run details to").grid(row=0, column=0, columnspan=2, sticky=tk.W)
@@ -225,7 +254,7 @@ class UIMixin:
         )
         ttk.Label(
             output_frame,
-            text="Leave blank to use the structure folder.",
+            text="Default: the folder containing your structure.",
             style="Muted.TLabel",
         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
 
@@ -239,6 +268,8 @@ class UIMixin:
         self.entry_file_advanced = ttk.Entry(frame, textvariable=self.var_input_path)
         self.entry_file_advanced.grid(row=1, column=0, sticky=tk.EW, pady=(2, 6))
         self._bind_field_update(self.entry_file_advanced)
+        self.entry_file_advanced.bind("<Return>", self._commit_structure_path)
+        self.entry_file_advanced.bind("<FocusOut>", self._commit_structure_path)
         ttk.Button(frame, text="File...", width=9, command=self.browse_file).grid(
             row=1, column=1, padx=(6, 0), pady=(2, 6)
         )
@@ -256,7 +287,7 @@ class UIMixin:
         self.combo_recent_file_advanced.grid(row=4, column=0, columnspan=3, sticky=tk.EW, pady=(2, 6))
         self.combo_recent_file_advanced.bind("<<ComboboxSelected>>", self._select_recent_file)
 
-        self.lbl_prolif = ttk.Label(frame, text="ProLIF JSON override (optional)")
+        self.lbl_prolif = ttk.Label(frame, text="Interaction JSON override (optional)")
         self.lbl_prolif.grid(row=5, column=0, columnspan=3, sticky=tk.W)
         self.entry_prolif = ttk.Entry(frame, textvariable=self.var_prolif_path)
         self.entry_prolif.grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=(2, 6))
@@ -266,7 +297,7 @@ class UIMixin:
         self.lbl_prolif_hint = ttk.Label(
             frame,
             text=(
-                "Leave blank to generate ProLIF annotations automatically for the selected chains."
+                "Leave blank to generate annotations with the selected chemical backend."
             ),
             style="Muted.TLabel",
             wraplength=self.config.sidebar_width - 86,
@@ -331,7 +362,7 @@ class UIMixin:
             frame, 1, "Partner chain", DEFAULT_RUN_CONFIG.chain_b, variable=self.var_chain_b
         )
         self.btn_swap_chains_advanced = ttk.Button(
-            frame, text="Swap A/B", style="Tool.TButton", command=self.swap_chains
+            frame, text="Swap", style="Tool.TButton", command=self.swap_chains
         )
         self.btn_swap_chains_advanced.grid(row=0, column=2, rowspan=2, sticky=tk.NS, padx=(6, 0), pady=3)
         self.entry_cutoff = self._entry_row(
@@ -721,7 +752,7 @@ class UIMixin:
         ttk.Label(frame, text="Interaction source").grid(row=16, column=0, sticky=tk.W, pady=(6, 2))
         self.combo_interaction_source = ttk.Combobox(
             frame,
-            values=["prolif", "geometric"],
+            values=interaction_sources(),
             textvariable=self.var_interaction_source,
             state="readonly",
             width=15,
@@ -831,7 +862,9 @@ class UIMixin:
         frame.columnconfigure(1, weight=1)
         ttk.Label(frame, text="View").grid(row=0, column=0, sticky=tk.W)
         self.view_options = {"2D atlas": "atlas", "3D interface": "surface"}
-        self.combo_view = ttk.Combobox(frame, values=list(self.view_options), state="readonly", width=19)
+        self.var_display_view = tk.StringVar(value="2D atlas")
+        self.combo_view = ttk.Combobox(frame, values=list(self.view_options), state="readonly", width=19,
+                                      textvariable=self.var_display_view)
         self.combo_view.set("2D atlas")
         self.combo_view.grid(row=0, column=1, sticky=tk.EW, pady=(0, 4))
         self.combo_view.bind("<<ComboboxSelected>>", lambda _event: self._view_changed())
@@ -871,8 +904,8 @@ class UIMixin:
         self.var_highlight_residues.trace_add("write", self._highlights_changed)
         entry = ttk.Entry(body, textvariable=self.var_highlight_residues)
         entry.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(2, 0))
-        entry.bind("<Return>", lambda _event: self.redraw_plot())
-        entry.bind("<FocusOut>", lambda _event: self.redraw_plot())
+        entry.bind("<Return>", self._commit_highlights)
+        entry.bind("<FocusOut>", self._commit_highlights)
         ttk.Label(body, text="Full keys, e.g. A:GLU:37, A:TYR:40", style="Muted.TLabel").grid(
             row=2, column=0, columnspan=3, sticky=tk.W, pady=(0, 5)
         )
@@ -938,7 +971,7 @@ class UIMixin:
         self.var_annotation_label = tk.StringVar(value="Value")
         label = ttk.Entry(body, textvariable=self.var_annotation_label)
         label.grid(row=9, column=1, columnspan=2, sticky=tk.EW, pady=3)
-        label.bind("<Return>", lambda _event: self.redraw_plot())
+        label.bind("<Return>", self._annotation_style_changed)
         ttk.Label(body, text="Color range").grid(row=10, column=0, sticky=tk.W)
         range_row = ttk.Frame(body)
         range_row.grid(row=10, column=1, columnspan=2, sticky=tk.EW)
@@ -946,7 +979,7 @@ class UIMixin:
         for variable in (self.var_value_min, self.var_value_max):
             value_entry = ttk.Entry(range_row, textvariable=variable, width=7)
             value_entry.pack(side=tk.LEFT, padx=(0, 5))
-            value_entry.bind("<Return>", lambda _event: self.redraw_plot())
+            value_entry.bind("<Return>", self._annotation_style_changed)
         ttk.Label(
             body,
             text="Minimum / maximum; leave blank for automatic limits.",
@@ -954,6 +987,28 @@ class UIMixin:
             wraplength=self.config.sidebar_width - 70,
         ).grid(row=11, column=0, columnspan=3, sticky=tk.W)
         body.grid_remove()
+        self._annotation_controls_target = self.var_annotation_target.get()
+        default_values = {"annotation_label": "Value", "value_min": "", "value_max": ""}
+        self._annotation_style_drafts = {name: dict(default_values) for name in ("Current map", "Next run")}
+
+    def _remember_annotation_controls(self):
+        self._annotation_style_drafts[self._annotation_controls_target] = {
+            "annotation_label": self.var_annotation_label.get(),
+            "value_min": self.var_value_min.get(), "value_max": self.var_value_max.get(),
+        }
+
+    def _annotation_style_changed(self, _event=None):
+        target = self.var_annotation_target.get()
+        try:
+            self.get_style_config(annotation_target=target)
+        except ConfigurationError as exc:
+            self._set_display_feedback(f"{target} residue values: {exc}")
+            return
+        self._set_display_feedback("")
+        if target == "Next run":
+            self.status_var.set("Value label and color limits prepared for the next run; the displayed map is unchanged.")
+        else:
+            self.redraw_plot()
 
     def _map_style_changed(self):
         footprints = self.map_style_options[self.combo_map_style.get()] == "footprints"
@@ -1040,6 +1095,12 @@ class UIMixin:
     def _highlights_changed(self, *_args):
         self._highlights_edited_for_input = True
 
+    def _commit_highlights(self, _event=None):
+        values = tuple(filter(None, re.split(r"[\s,]+", self.var_highlight_residues.get().strip())))
+        shown = self._successful_single_run
+        if self._pending_single_run is not None or (shown and values != tuple(shown["style"].get("highlight_residues", ()))):
+            self.redraw_plot()
+
     def _restore_display_highlights(self):
         if self._pending_single_run is None and self._successful_single_run is not None:
             highlights = self._successful_single_run["style"].get("highlight_residues", ())
@@ -1059,6 +1120,14 @@ class UIMixin:
         return f"{Path(path).name} | {chain_a} to {chain_b}" if path else "Select a structure and chains"
 
     def _annotation_target_changed(self):
+        self._remember_annotation_controls()
+        target = self.var_annotation_target.get()
+        if target != self._annotation_controls_target:
+            values = self._annotation_style_drafts[target]
+            self.var_annotation_label.set(values["annotation_label"])
+            self.var_value_min.set(values["value_min"])
+            self.var_value_max.set(values["value_max"])
+            self._annotation_controls_target = target
         if self.var_annotation_target.get() == "Next run":
             data = self._next_run_annotations
             values, path = (data["values"], data["path"]) if data else (None, "")
@@ -1075,8 +1144,9 @@ class UIMixin:
         if not hasattr(self, "map_context_var"):
             return
         result = self._successful_single_run
-        current = self._context_text(self._result_context(result)) if result else "No map loaded"
-        lines = [f"Canvas: {current}"]
+        current = self._context_text(self._result_context(result)) if result else "Open an atlas or create an interface map"
+        view = "3D interface" if result and result.get("style", {}).get("view") == "surface" else "2D atlas"
+        lines = [f"Displayed map: {current}" + (f" | {view}" if result else "")]
         if self._pending_single_run is not None:
             lines.append("Ready to draw: " + self._context_text(self._result_context(self._pending_single_run)))
             lines.append("Adjust the display settings, then Apply Style. The computed atlas can also be saved.")
@@ -1086,8 +1156,10 @@ class UIMixin:
         target_result = self._pending_single_run or result
         target_context = (self._input_context() if target == "Next run" else
                           self._result_context(target_result) if target_result else ("", "", ""))
-        lines.append(f"CSV ({target.lower()}): {self._context_text(target_context)}")
+        if self.var_annotation_file.get():
+            lines.append(f"Residue values ({target.lower()}): {self._context_text(target_context)}")
         self.map_context_var.set("\n".join(lines))
+        self._sync_extensions()
 
     def _init_label_layout_controls(self, parent):
         label_frame = ttk.LabelFrame(parent, text="Labels and Layout", padding=10)
@@ -1182,33 +1254,36 @@ class UIMixin:
 
     def _init_run_controls(self):
         frame = self.sidebar_action_frame
-        frame.pack(fill=tk.X, pady=(8, 5))
         frame.columnconfigure(0, weight=1)
-        frame.columnconfigure(1, weight=1)
-
+        self.run_hint_var = tk.StringVar(value="Choose a structure to begin.")
+        ttk.Label(frame, textvariable=self.run_hint_var, style="Muted.TLabel",
+                  wraplength=self.config.sidebar_width - 60).grid(row=0, column=0, sticky=tk.W, pady=(0, 6))
         self.btn_run = ttk.Button(
             frame, text="Create Interface Map", style="Primary.TButton", command=self.start_selected_run
         )
-        self.btn_run.grid(row=0, column=0, sticky=tk.EW, pady=(0, 6), padx=(0, 4))
-        self.btn_cancel = ttk.Button(frame, text="Cancel", command=self.request_cancel, state=tk.DISABLED)
-        self.btn_cancel.grid(row=0, column=1, sticky=tk.EW, pady=(0, 6), padx=(4, 0))
-
+        self.btn_run.grid(row=1, column=0, sticky=tk.EW)
+        self.task_progress_frame = ttk.Frame(frame)
+        self.task_progress_frame.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
+        self.task_progress_frame.columnconfigure(0, weight=1)
         self.stage_status_var = tk.StringVar(value="")
         self.lbl_stage_status = ttk.Label(
-            frame,
-            textvariable=self.stage_status_var,
-            style="Muted.TLabel",
-            wraplength=self.config.sidebar_width - 70,
+            self.task_progress_frame, textvariable=self.stage_status_var, style="Muted.TLabel",
+            wraplength=self.config.sidebar_width - 160,
         )
-        self.lbl_stage_status.grid(row=1, column=0, columnspan=2, sticky=tk.W)
-        self.lbl_stage_status.grid_remove()
-
-        self.progress = ttk.Progressbar(frame, mode="indeterminate")
-        self.progress.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0))
-        self.progress.grid_remove()
+        self.lbl_stage_status.grid(row=0, column=0, sticky=tk.W)
+        self.btn_cancel = ttk.Button(self.task_progress_frame, text="Cancel", command=self.request_cancel,
+                                     state=tk.DISABLED)
+        self.btn_cancel.grid(row=0, column=1, rowspan=2, padx=(8, 0), sticky=tk.E)
+        self.progress = ttk.Progressbar(self.task_progress_frame, mode="indeterminate")
+        self.progress.grid(row=1, column=0, sticky=tk.EW, pady=(5, 0))
+        self.task_progress_frame.grid_remove()
+        ttk.Separator(frame).grid(row=3, column=0, sticky=tk.EW, pady=(12, 8))
+        extra = ttk.Frame(frame)
+        extra.grid(row=4, column=0, sticky=tk.EW)
+        self.plugin_actions_frame = extra
 
     def _init_run_summary(self):
-        frame = ttk.LabelFrame(self.left_frame, text="Run Summary", padding=10)
+        frame = ttk.LabelFrame(self.advanced_tab, text="Run Summary", padding=10)
         frame.pack(fill=tk.X, pady=5)
         self.run_summary_var = tk.StringVar(value="Select an input to preview the run setup.")
         ttk.Label(
@@ -1219,23 +1294,45 @@ class UIMixin:
         ).pack(anchor=tk.W)
 
     def _init_log_panel(self):
-        log_frame = ttk.LabelFrame(self.left_frame, text="Run Log", padding=8)
-        log_frame.pack(fill=tk.BOTH, expand=False, pady=5)
+        self.activity_frame = ttk.Frame(self.right_frame, padding=(10, 5), style="Workspace.TFrame")
+        self.activity_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        self.var_show_activity = tk.BooleanVar(value=False)
+        header = ttk.Frame(self.activity_frame, style="Workspace.TFrame")
+        header.pack(fill=tk.X)
+        ttk.Checkbutton(header, text="Show activity", variable=self.var_show_activity,
+                        command=self._toggle_activity).pack(side=tk.LEFT)
+        self.activity_details = ttk.Frame(self.activity_frame, style="Workspace.TFrame")
+        actions = ttk.Frame(self.activity_details, style="Workspace.TFrame")
+        actions.pack(fill=tk.X)
+        ttk.Button(actions, text="Save log...", style="Tool.TButton", command=self.save_diagnostics).pack(side=tk.RIGHT)
+        ttk.Button(actions, text="Copy diagnostics", style="Tool.TButton", command=self.copy_diagnostics).pack(side=tk.RIGHT, padx=4)
         self.log_text = scrolledtext.ScrolledText(
-            log_frame,
-            height=self.config.log_visible_lines,
-            wrap=tk.WORD,
-            state=tk.DISABLED,
-            relief=tk.FLAT,
-            borderwidth=1,
+            self.activity_details, height=6, wrap=tk.WORD, state=tk.DISABLED, relief=tk.FLAT, borderwidth=1,
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        self.log_text.pack(fill=tk.X, pady=(5, 0))
+
+    def _toggle_activity(self):
+        if self.var_show_activity.get():
+            self.activity_details.pack(fill=tk.X, pady=(5, 0))
+            self.log_text.see(tk.END)
+        else:
+            self.activity_details.pack_forget()
 
     def _init_plot_area(self):
         toolbar = ttk.Frame(self.right_frame, padding=(10, 8), style="Workspace.TFrame")
         toolbar.pack(fill=tk.X)
-        ttk.Label(toolbar, text="Interface Map", style="Workspace.TLabel").pack(anchor=tk.W)
-        self.map_context_var = tk.StringVar(value="Canvas: No map loaded")
+        heading = ttk.Frame(toolbar, style="Workspace.TFrame")
+        heading.pack(fill=tk.X)
+        ttk.Label(heading, text="Interface Map", style="CanvasHeader.TLabel").pack(side=tk.LEFT)
+        views = ttk.Frame(heading, style="Workspace.TFrame")
+        views.pack(side=tk.RIGHT)
+        self.view_buttons = []
+        for label in self.view_options:
+            button = ttk.Radiobutton(views, text=label, value=label, variable=self.var_display_view,
+                                     style="Page.Toolbutton", command=self._view_changed)
+            button.pack(side=tk.LEFT, padx=1)
+            self.view_buttons.append(button)
+        self.map_context_var = tk.StringVar(value="Open an atlas or create an interface map")
         context = ttk.Label(toolbar, textvariable=self.map_context_var, style="Workspace.TLabel", wraplength=600)
         context.pack(fill=tk.X, pady=(3, 7))
         actions = ttk.Frame(toolbar, style="Workspace.TFrame")
@@ -1251,10 +1348,21 @@ class UIMixin:
         )
         self.btn_open_atlas = ttk.Button(actions, text="Open Atlas...", style="Tool.TButton", command=self.open_atlas)
         buttons = (self.btn_open_atlas, self.btn_save_atlas, self.btn_redraw, self.btn_save)
+        self.figure_help = ttk.Label(
+            toolbar, text="Save Atlas keeps an editable map. Save Figure exports the displayed view.",
+            style="Workspace.TLabel", wraplength=600,
+        )
+        self.figure_help.pack(fill=tk.X, pady=(5, 0))
+        self.display_feedback_var = tk.StringVar(value="")
+        self.display_feedback_label = ttk.Label(
+            toolbar, textvariable=self.display_feedback_var, style="WorkspaceError.TLabel", wraplength=600,
+        )
 
         def fit_toolbar(event):
             columns = 4 if event.width >= 580 else 2
             context.configure(wraplength=max(200, event.width - 20))
+            self.figure_help.configure(wraplength=max(200, event.width - 20))
+            self.display_feedback_label.configure(wraplength=max(200, event.width - 20))
             for column in range(4):
                 actions.columnconfigure(column, weight=1 if column < columns else 0)
             for index, button in enumerate(buttons):
@@ -1262,6 +1370,8 @@ class UIMixin:
 
         toolbar.bind("<Configure>", fit_toolbar)
 
+        self._init_extensions()
+        self._init_log_panel()
         self.canvas_frame = ttk.Frame(self.right_frame, style="Workspace.TFrame")
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
         self.current_canvas = None
@@ -1271,16 +1381,22 @@ class UIMixin:
         for widget in self.canvas_frame.winfo_children():
             widget.destroy()
         holder = ttk.Frame(self.canvas_frame, style="Workspace.TFrame")
-        holder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        ttk.Label(holder, text="No interface map yet", style="Workspace.TLabel").pack(pady=(0, 4))
-        ttk.Label(
-            holder, text="Choose a structure to create a map, or open a saved atlas to continue editing.",
-            style="Workspace.TLabel", wraplength=320, justify=tk.CENTER,
-        ).pack(pady=(0, 10))
-        action_row = ttk.Frame(holder, style="Workspace.TFrame")
-        action_row.pack()
-        ttk.Button(action_row, text="Browse Structure...", command=self.browse_file).pack(fill=tk.X, pady=2)
-        ttk.Button(action_row, text="Open Atlas...", command=self.open_atlas).pack(fill=tk.X, pady=2)
+        holder.place(relx=0.5, rely=0.45, anchor=tk.CENTER)
+        ttk.Label(holder, text="Explore a protein interface", style="CanvasHeader.TLabel").pack(pady=(0, 12))
+        self.empty_state_hint = tk.StringVar(
+            value="1. Choose a PDB or mmCIF structure.\n2. Select its surface and partner chains.\n3. Click Create Interface Map."
+        )
+        ttk.Label(holder, textvariable=self.empty_state_hint, style="Workspace.TLabel",
+                  wraplength=360, justify=tk.LEFT).pack(pady=(0, 16))
+        self.empty_state_actions = []
+        for label, command in (("Choose Structure...", self.browse_file),
+                               ("Try 1BVK Example...", self.load_example),
+                               ("Open Atlas...", self.open_atlas)):
+            button = ttk.Button(holder, text=label, command=command)
+            button.pack(fill=tk.X, pady=3)
+            self.empty_state_actions.append(button)
+        ttk.Label(holder, text="Open Atlas restores saved geometry, colors and labels.", style="Workspace.TLabel",
+                  wraplength=360).pack(pady=(16, 0))
 
     def _init_status_bar(self):
         self.status_var = tk.StringVar(value="Ready")
@@ -1369,6 +1485,9 @@ class UIMixin:
 
     def _refresh_recent_controls(self):
         self.combo_recent_file.configure(values=self.recent_files)
+        if self.recent_files:
+            self.lbl_recent_file.grid()
+            self.combo_recent_file.grid()
         self.combo_recent_file_advanced.configure(values=self.recent_files)
         self.combo_recent_output_dir.configure(values=self.recent_output_dirs)
 
@@ -1394,6 +1513,8 @@ class UIMixin:
     def _sync_mode_controls(self):
         is_benchmark = self.var_run_mode.get() == "benchmark"
         self.lbl_input_path.config(text="Benchmark folder" if is_benchmark else "Structure file")
+        self.lbl_basic_input_path.config(text="Benchmark folder" if is_benchmark else "Structure file")
+        self.btn_browse_input.config(text="Folder..." if is_benchmark else "File...")
         self.lbl_output_dir.config(text="Benchmark output folder" if is_benchmark else "Default save directory")
         self.btn_run.config(text="Run Benchmark" if is_benchmark else "Create Interface Map")
 
@@ -1454,15 +1575,15 @@ class UIMixin:
             source = (
                 f"geometric ≤ {self.entry_contact_distance.get()} Å"
                 if self.var_interaction_source.get() == "geometric"
-                else "ProLIF provided"
+                else "interaction JSON provided"
                 if self.entry_prolif.get().strip()
-                else "ProLIF auto-generate"
+                else f"{self.var_interaction_source.get()} auto-generate"
             )
             try:
                 objective_weight = float(self.entry_residue_fragmentation_weight.get())
             except ValueError:
                 objective_weight = 0.0
-            method = "TopoPPI complete" if objective_weight > 0.0 else "geometry-only ablation"
+            method = "residue-aware mapping" if objective_weight > 0.0 else "geometry-only mapping"
             self.run_summary_var.set(
                 f"Single: {path or '(no structure)'} | chains {chain_a or '?'} / {chain_b or '?'} | "
                 f"save {output or '(input folder)'} | {method} | {source} | "
@@ -1541,6 +1662,11 @@ class UIMixin:
         self._form_changed()
 
     def start_selected_run(self):
+        if self._busy or self._closing or self._extensions_need_restart():
+            return
+        if self._input_guidance():
+            self._refresh_action_states()
+            return
         if self.var_run_mode.get() == "benchmark":
             self.start_benchmark()
         else:
@@ -1570,7 +1696,7 @@ class UIMixin:
                 except tk.TclError:
                     pass
         try:
-            self.root.after(self.config.ui_poll_interval_ms, self._drain_ui_queue)
+            self._ui_poll_after_id = self.root.after(self.config.ui_poll_interval_ms, self._drain_ui_queue)
         except tk.TclError:
             pass
 
@@ -1585,7 +1711,8 @@ class UIMixin:
         self.log_history.append(line)
         self.log_history = self.log_history[-500:]
         self.current_run_log.append(line)
-        self.status_var.set(message)
+        if not self._busy:
+            self.status_var.set(message)
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.insert(tk.END, line + "\n")
         self.log_text.see(tk.END)
@@ -1602,7 +1729,7 @@ class UIMixin:
         self._cancel_event.clear()
         self._busy = True
         self._disabled_controls = []
-        stack = [self.basic_tab, self.advanced_tab]
+        stack = [self.basic_tab, self.appearance_tab, self.advanced_tab]
         while stack:
             widget = stack.pop()
             stack.extend(widget.winfo_children())
@@ -1611,6 +1738,7 @@ class UIMixin:
                 widget.configure(state=tk.DISABLED)
         self.btn_run.config(state=tk.DISABLED)
         self.btn_cancel.config(state=tk.NORMAL, text="Cancel")
+        self.task_progress_frame.grid()
         self.btn_redraw.config(state=tk.DISABLED)
         self.btn_save.config(state=tk.DISABLED)
         self.progress.stop()
@@ -1622,6 +1750,7 @@ class UIMixin:
             self.progress.start(10)
         self.stage_status_var.set("")
         self.lbl_stage_status.grid()
+        self.status_var.set(message)
         self.log(message)
         self._refresh_action_states()
 
@@ -1634,6 +1763,8 @@ class UIMixin:
         self.progress.stop()
         self.progress.grid_remove()
         self.lbl_stage_status.grid_remove()
+        self.task_progress_frame.grid_remove()
+        self._sync_mode_controls()
         self._refresh_action_states()
         self._update_map_context()
 
@@ -1652,15 +1783,21 @@ class UIMixin:
         self.post_to_ui(self._set_stage_progress_ui, stage, value, message)
 
     def _set_stage_progress_ui(self, stage, value, message=None):
-        self.progress.configure(mode="determinate", maximum=100)
-        self.progress.stop()
         self.progress.grid()
-        percent = max(0, min(int(value), 100))
-        self.progress.configure(value=percent)
-        label = f"{stage}: {percent}%"
-        if message:
-            label = f"{label} - {message}"
+        if self.var_run_mode.get() == "single" and value < 100:
+            if str(self.progress.cget("mode")) != "indeterminate":
+                self.progress.configure(mode="indeterminate")
+                self.progress.start(15)
+            label = f"{stage}: {message}" if message else stage
+        else:
+            self.progress.stop()
+            percent = max(0, min(int(value), 100))
+            self.progress.configure(mode="determinate", maximum=100, value=percent)
+            label = f"{stage}: {percent}%"
+            if message:
+                label += f" - {message}"
         self.stage_status_var.set(label)
+        self.status_var.set(label)
 
     def _refresh_action_states(self):
         ready = self._required_inputs_ready(
@@ -1670,17 +1807,101 @@ class UIMixin:
             self.var_chain_b.get(),
         )
         unavailable = self._busy or self._closing
-        run_state = tk.NORMAL if ready and not unavailable else tk.DISABLED
+        restart_required = self._extensions_need_restart()
+        run_state = tk.NORMAL if ready and not unavailable and not restart_required else tk.DISABLED
         self.btn_run.config(state=run_state)
+        same_input = (self._successful_single_run is not None
+                      and self._input_context() == self._result_context(self._successful_single_run))
+        if self.var_run_mode.get() == "single":
+            self.btn_run.configure(text="Creating Interface Map..." if self._busy else
+                                   "Recreate Interface Map" if same_input else "Create Interface Map")
+        if hasattr(self, "run_hint_var"):
+            hint = self._input_guidance()
+            if hint:
+                self.btn_run.config(state=tk.DISABLED)
+            elif self._busy:
+                hint = "Creating the interface map..." if self.var_run_mode.get() == "single" else "Running benchmark..."
+            elif self._closing:
+                hint = "Closing..."
+            elif restart_required:
+                hint = "Restart TopoPPI to finish plugin setup."
+            elif self.var_run_mode.get() == "benchmark":
+                hint = "Ready to run the selected benchmark."
+            elif same_input:
+                hint = "Map ready. Use Appearance to adjust its display."
+            else:
+                hint = f"Ready: surface {self.var_chain_a.get()} / partner {self.var_chain_b.get()}."
+            self.run_hint_var.set(hint)
+            if hasattr(self, "empty_state_hint") and self.current_canvas is None:
+                action = "Run Benchmark" if self.var_run_mode.get() == "benchmark" else "Create Interface Map"
+                self.empty_state_hint.set(hint + f"\n\nUse {action} at the bottom left." if ready else
+                    "1. Choose a PDB or mmCIF structure.\n2. Select its surface and partner chains.\n3. Click Create Interface Map.")
+        for button in getattr(self, "empty_state_actions", []):
+            if button.winfo_exists():
+                button.configure(state=tk.DISABLED if unavailable else tk.NORMAL)
+        self._sync_extensions()
         successful_run = self._successful_single_run
         has_plot_data = successful_run is not None or self._pending_single_run is not None
         has_figure = successful_run is not None and successful_run["figure"] is self.current_fig
         plot_state = tk.NORMAL if (has_plot_data and not unavailable) else tk.DISABLED
         save_state = tk.NORMAL if (has_figure and not unavailable) else tk.DISABLED
-        self.btn_redraw.config(state=plot_state)
+        self.btn_redraw.config(state=tk.DISABLED if restart_required else plot_state)
         self.btn_save.config(state=save_state)
-        self.btn_save_atlas.config(state=plot_state)
+        atlas_run = self._pending_single_run or successful_run
+        native_only = bool(atlas_run and
+            any("uv" not in patch.metadata and "uv_global" not in patch.metadata
+                for patch in atlas_run.get("all_patches", atlas_run["patches"])))
+        atlas_state = tk.DISABLED if native_only else plot_state
+        self.btn_save_atlas.config(state=atlas_state)
+        if hasattr(self, "figure_help"):
+            self.figure_help.configure(text=(
+                "Save Figure exports this view. Save Atlas becomes available after creating a 2D map."
+                if native_only else "Save Atlas keeps an editable map. Save Figure exports the displayed view."
+            ))
         self.btn_open_atlas.config(state=tk.DISABLED if unavailable else tk.NORMAL)
+        for button in getattr(self, "view_buttons", []):
+            button.configure(state=tk.DISABLED if restart_required else plot_state)
+        if hasattr(self, "file_menu"):
+            for index in (0, 1, 2):
+                self.file_menu.entryconfigure(index, state=tk.DISABLED if unavailable else tk.NORMAL)
+            self.file_menu.entryconfigure(4, state=save_state)
+            self.file_menu.entryconfigure(5, state=atlas_state)
+
+    def _input_guidance(self):
+        path = self.var_input_path.get().strip()
+        if not path:
+            return "Choose a structure or try the 1BVK example."
+        if self.var_run_mode.get() == "benchmark":
+            if not os.path.isdir(path):
+                return "Choose a benchmark folder."
+            if self.var_chain_selection_mode.get() == "manifest" and not os.path.isfile(self.entry_manifest_path.get().strip()):
+                return "Choose an existing benchmark manifest CSV, or change the chain selection mode."
+            return ""
+        if not os.path.isfile(path):
+            return "Choose an existing PDB or mmCIF structure file."
+        if getattr(self, "_chain_scan_path", None) == path:
+            if getattr(self, "_chain_scan_problem", ""):
+                return self._chain_scan_problem
+            if len(self.chain_residue_counts) < 2:
+                return "Choose a structure containing at least two protein chains."
+        a, b = self.var_chain_a.get().strip(), self.var_chain_b.get().strip()
+        if not a or not b:
+            return "Select a surface chain and a partner chain."
+        if a == b:
+            return "Select two different chains for the interface."
+        if getattr(self, "_chain_scan_path", None) == path:
+            if not self.chain_residue_counts:
+                return "Choose a structure containing at least two protein chains."
+            missing = [chain for chain in (a, b) if chain not in self.chain_residue_counts]
+            if missing:
+                return "Select chains present in this structure: " + ", ".join(self.chain_residue_counts) + "."
+        return ""
+
+    def _commit_structure_path(self, _event=None):
+        path = self.var_input_path.get().strip()
+        if path and self.var_run_mode.get() == "single" and path != getattr(self, "_chain_scan_path", None):
+            self._populate_chain_choices(path)
+        self._form_changed()
 
     @staticmethod
     def _required_inputs_ready(mode, path, chain_a, chain_b):
@@ -1692,7 +1913,45 @@ class UIMixin:
         partner = str(chain_b).strip()
         return bool(surface and partner and surface != partner)
 
+    def load_example(self):
+        if self._busy or self._closing:
+            return
+        from topoppi.examples import copy_example
+
+        folder = filedialog.askdirectory(title="Choose an output folder for the 1BVK example", parent=self.root)
+        if not folder:
+            return
+        try:
+            path = copy_example(folder)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Open 1BVK example", str(exc), parent=self.root)
+            return
+        self.var_input_path.set(str(path))
+        self.var_run_mode.set("single")
+        self.var_chain_a.set("B")
+        self.var_chain_b.set("C")
+        self.var_output_dir.set(str(path.parent))
+        self.var_prolif_path.set("")
+        self.var_settings_page.set("basic")
+        self._populate_chain_choices(str(path))
+        self._remember_recent_file(str(path))
+        self._remember_recent_output_dir(str(path.parent))
+        self._sync_settings_page()
+        self._sync_mode_controls()
+        self.log("1BVK example ready: antibody chain B contacts lysozyme chain C. Click Create Interface Map.")
+        self.btn_run.focus_set()
+
+    def browse_input(self):
+        if self._busy or self._closing:
+            return
+        if self.var_run_mode.get() == "benchmark":
+            self.browse_folder()
+        else:
+            self.browse_file()
+
     def browse_file(self):
+        if self._busy or self._closing:
+            return
         filename = filedialog.askopenfilename(
             filetypes=[
                 ("Structure Files", "*.pdb *.cif *.mmcif"),
@@ -1728,6 +1987,10 @@ class UIMixin:
             self.log(f"Selected folder: {os.path.basename(folder)}")
 
     def _populate_chain_choices(self, filename):
+        self._chain_scan_path = str(filename)
+        self._chain_scan_problem = ""
+        for combo in (self.combo_basic_chain_a, self.combo_basic_chain_b, self.entry_chain_a, self.entry_chain_b):
+            combo.configure(values=())
         try:
             from topoppi.io.io_loader import PDBLoader
 
@@ -1735,13 +1998,17 @@ class UIMixin:
             chains = loader.get_protein_chain_ids()
         except Exception as exc:
             self.chain_residue_counts = {}
+            self._chain_scan_problem = "Check the structure file format, then choose a readable PDB or mmCIF file."
             self._update_chain_preview()
-            self.log(f"Chain scan skipped: {exc}")
+            self.log(f"Could not read protein chains: {exc}")
+            self._form_changed()
             return
         if not chains:
             self.chain_residue_counts = {}
+            self._chain_scan_problem = "Choose a structure containing at least two protein chains."
             self._update_chain_preview()
-            self.log("No protein chains detected in selected structure.")
+            self.log("The selected structure contains no protein chains.")
+            self._form_changed()
             return
         self.chain_residue_counts = {chain_id: loader.get_chain_residue_count(chain_id) for chain_id in chains}
         counts = [f"{chain_id}:{count}" for chain_id, count in self.chain_residue_counts.items()]
@@ -1754,13 +2021,20 @@ class UIMixin:
             combo.configure(values=chains)
         if self.var_chain_a.get().strip() not in chains:
             self.var_chain_a.set(chains[0])
-        if self.var_chain_b.get().strip() not in chains and len(chains) > 1:
-            self.var_chain_b.set(chains[1])
+        if self.var_chain_b.get().strip() not in chains or self.var_chain_b.get() == self.var_chain_a.get():
+            self.var_chain_b.set(next((chain for chain in chains if chain != self.var_chain_a.get()), ""))
         self._update_chain_preview()
         self._form_changed()
         self.log("Detected protein chains (residues): " + ", ".join(counts))
 
     def _update_chain_preview(self):
+        path = self.var_input_path.get().strip()
+        if path and path != getattr(self, "_chain_scan_path", None):
+            self.chain_preview_var.set("Press Enter in Structure file to read its chains.")
+            return
+        if path and getattr(self, "_chain_scan_problem", ""):
+            self.chain_preview_var.set(self._chain_scan_problem)
+            return
         if not self.chain_residue_counts:
             self.chain_preview_var.set("Select a structure to detect chains.")
             return
@@ -1772,7 +2046,8 @@ class UIMixin:
             elif chain_id == self.var_chain_b.get().strip():
                 marker = " partner"
             parts.append(f"{chain_id}: {count} residues{marker}")
-        self.chain_preview_var.set(" | ".join(parts))
+        self.chain_preview_var.set(" | ".join(parts) + (
+            ". Choose a structure with two protein chains." if len(parts) == 1 else ""))
 
     def swap_chains(self):
         chain_a = self.var_chain_a.get()
@@ -1984,7 +2259,7 @@ class UIMixin:
         if self.var_style_preset.get() != "Custom":
             self.var_style_preset.set("Custom")
 
-    def get_style_config(self):
+    def get_style_config(self, *, annotation_target=None):
         active_types = [t for t, var in self.interaction_vars.items() if var.get()]
         try:
             font_size = int(self.spin_size.get())
@@ -1995,21 +2270,24 @@ class UIMixin:
         style = dict(self.loaded_atlas_style)
         footprints = self.map_style_options[self.combo_map_style.get()] == "footprints"
         surface = self.view_options[self.combo_view.get()] == "surface"
+        self._remember_annotation_controls()
+        annotation_target = annotation_target or ("Current map" if self._successful_single_run else self._annotation_controls_target)
+        annotation_style = self._annotation_style_drafts[annotation_target]
         limits = {}
-        for name, variable in (("value_min", self.var_value_min), ("value_max", self.var_value_max)):
-            text = variable.get().strip()
+        for name in ("value_min", "value_max"):
+            text = annotation_style[name].strip()
             try:
                 limits[name] = float(text) if text else None
             except ValueError as exc:
-                raise ConfigurationError("Color limits must be numbers or blank.") from exc
+                raise ConfigurationError("Enter numbers for the color limits, or leave them empty.") from exc
             if limits[name] is not None and not math.isfinite(limits[name]):
-                raise ConfigurationError("Color limits must be finite numbers or blank.")
+                raise ConfigurationError("Enter finite numbers for the color limits, or leave them empty.")
         if (
             limits["value_min"] is not None
             and limits["value_max"] is not None
             and limits["value_min"] >= limits["value_max"]
         ):
-            raise ConfigurationError("The minimum color limit must be smaller than the maximum.")
+            raise ConfigurationError("Set the minimum color limit below the maximum.")
         style.update(
             {
                 "color": self.residue_color,
@@ -2040,7 +2318,7 @@ class UIMixin:
                 "show_seams": self.var_show_seams.get(),
                 "show_residue_borders": self.var_show_residue_borders.get(),
                 "annotation_file": self._current_annotation_file,
-                "annotation_label": self.var_annotation_label.get(),
+                "annotation_label": annotation_style["annotation_label"],
                 **self.footprint_colors,
                 **limits,
             }
@@ -2182,6 +2460,12 @@ class UIMixin:
         successful_run = self._pending_single_run or self._successful_single_run
         if self._busy or successful_run is None:
             return
+        if any(
+            "uv" not in patch.metadata and "uv_global" not in patch.metadata
+            for patch in successful_run.get("all_patches", successful_run["patches"])
+        ):
+            self.status_var.set("Generate UV coordinates before saving an editable atlas. The native geometry can be exported as a figure.")
+            return
         path = filedialog.asksaveasfilename(
             title="Save editable atlas",
             initialdir=self._default_output_dir(successful_run),
@@ -2226,7 +2510,10 @@ class UIMixin:
             metadata = document.metadata
             params = dict(metadata.get("params", {}))
             params.update({"atlas_file": path, "auto_save": False, "output_dir": os.path.dirname(path)})
-            params.setdefault("path", path)
+            source = metadata.get("interface", {}).get("source", {})
+            params.setdefault("path", source.get("path") or path)
+            params.setdefault("chain_a", document.visualizer.chain_a_id)
+            params.setdefault("chain_b", document.visualizer.chain_b_id)
             params["min_points"] = style.get("min_points", params.get("min_points", document.visualizer.config.min_points))
             manifest = dict(metadata.get("manifest", metadata))
             manifest.setdefault("config", {})
@@ -2249,10 +2536,14 @@ class UIMixin:
             self._restore_atlas_style(previous_style)
             messagebox.showerror("Open atlas", str(exc))
             return
+        self._extensions_document_loaded(manifest)
         self.log(f"Opened cached atlas {path}; style updates reuse the saved UV coordinates.")
 
     def _restore_atlas_style(self, style):
         """Restore controls and embedded annotations without needing the original inputs."""
+        self._remember_annotation_controls()
+        self._annotation_controls_target = "Current map"
+        self.var_annotation_target.set("Current map")
         self.loaded_atlas_style = dict(style)
         self.annotation_values = style.get("annotation_values")
         self.label_offsets = dict(style.get("label_offsets", {}))
@@ -2279,6 +2570,7 @@ class UIMixin:
         self.var_annotation_label.set(style.get("annotation_label", "Value"))
         self.var_value_min.set("" if style.get("value_min") is None else str(style["value_min"]))
         self.var_value_max.set("" if style.get("value_max") is None else str(style["value_max"]))
+        self._remember_annotation_controls()
         for key in self.footprint_colors:
             if key in style:
                 self.footprint_colors[key] = style[key]
@@ -2319,6 +2611,8 @@ class UIMixin:
             return Path(params["atlas_file"]).stem + ".png"
         manifest = successful_run["manifest"]
         source = Path(str(params["path"]))
+        if filename := self._extension_filename(successful_run):
+            return filename
         chain_a = str(params["chain_a"])
         chain_b = str(params["chain_b"])
         cutoff = self._format_number(params["cutoff"])
@@ -2369,7 +2663,9 @@ class UIMixin:
     def start_analysis(self):
         try:
             form = self.read_single_form()
-            style = self.get_style_config()
+            next_annotations = self._next_run_annotations
+            use_next_values = next_annotations is not None and next_annotations["context"] == self._input_context()
+            style = self.get_style_config(annotation_target="Next run" if use_next_values else None)
         except ConfigurationError as exc:
             messagebox.showerror("Invalid Input", str(exc))
             return

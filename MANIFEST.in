@@ -18,9 +18,13 @@ include docs/assets/topoppi-output-surface.png
 include docs/assets/topoppi-output-markers.png
 include docs/assets/topoppi-output-values.png
 recursive-include src/topoppi/assets *.ico *.png
+include src/topoppi/assets/plugins.json
+recursive-include src/topoppi/assets/examples *.pdb *.md
+recursive-include src/topoppi_chemistry *.py
 recursive-include installer/windows *.iss *.ps1 *.pyw *.md
 recursive-include installer/macos *.sh *.py *.md *.in *.c TopoPPI
 include installer/smoke_footprints.py
+include tools/README.md
 include tools/OptCuts/NOTICE.md
 include tools/OptCuts/LICENSE.txt
 include tools/OptCuts/THIRD_PARTY_LICENSES.txt
@@ -29,10 +33,8 @@ include tools/OptCuts/build_residue_aware_optcuts.sh
 include tools/OptCuts/build_windows_optcuts.ps1
 recursive-include tools/OptCuts/residue_aware *.cpp *.hpp *.md *.patch
 recursive-include tools/OptCuts/reproducible *.patch
-recursive-include tools/publication *.py *.md
-include tests/fixtures/1bvk.pdb
 include tests/fixtures/prolif_interactions.json
-include tests/fixtures/tiny_complex.pdb
+recursive-include tests *.py *.md *.json *.pdb
 recursive-exclude .github *
 recursive-exclude dist *
 recursive-exclude build *
@@ -45,3 +47,21 @@ prune .internal
 global-exclude __pycache__
 global-exclude *.py[cod]
 global-exclude .DS_Store
+
+prune plugins
+
+prune .storage
+prune benchmark_results
+prune output
+prune TopoPPI_icon_assets
+exclude AGENTS.md
+
+include examples/plugin/topoppi_example_stats.py
+include examples/plugin/pyproject.toml
+include examples/plugin/README.md
+prune examples/plugin/build
+
+recursive-include src/topoppi_representation *.py
+recursive-include scripts/analysis *.py *.md
+include installer/smoke_affinity.py
+include installer/smoke_binding.py

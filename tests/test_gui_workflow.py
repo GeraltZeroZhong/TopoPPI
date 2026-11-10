@@ -6,11 +6,13 @@ import threading
 import tkinter as tk
 import unittest
 from pathlib import Path
+from tkinter import font as tkfont
 from types import SimpleNamespace
 from unittest import mock
 
 from topoppi.config import DEFAULT_RUN_CONFIG
-from topoppi.gui_app.app import ProtSurfApp
+from topoppi.gui_app.app import InterfaceApp
+from topoppi.gui_app.extensions import ExtensionsMixin
 from topoppi.gui_app.plot_mixin import PlotMixin
 from topoppi.gui_app.ui_mixin import UIMixin
 from topoppi.gui_app.workflow_mixin import WorkflowMixin, _GuiLogAdapter
@@ -69,6 +71,18 @@ class _BenchmarkPipelineHarness(WorkflowMixin):
 
 
 class GUIWorkflowTests(unittest.TestCase):
+    def test_empty_structure_field_keeps_atlas_review_free_of_input_errors(self):
+        interpreter = tk.Tcl()
+        harness = SimpleNamespace(
+            var_input_path=tk.StringVar(master=interpreter, value=""),
+            var_run_mode=tk.StringVar(master=interpreter, value="single"),
+            _populate_chain_choices=mock.Mock(),
+            _form_changed=mock.Mock(),
+        )
+        UIMixin._commit_structure_path(harness)
+        harness._populate_chain_choices.assert_not_called()
+        harness._form_changed.assert_called_once()
+
     def test_gui_log_adapter_routes_debug_details_to_the_module_logger(self):
         messages = []
         adapter = _GuiLogAdapter(messages.append)
@@ -85,10 +99,16 @@ class GUIWorkflowTests(unittest.TestCase):
     def test_desktop_app_starts_and_closes(self):
         root = tk.Tk()
         root.withdraw()
+        system_font = tkfont.nametofont("TkDefaultFont").actual("family")
+        available_fonts = {name.casefold() for name in tkfont.families(root)}
         try:
-            app = ProtSurfApp(root)
+            app = InterfaceApp(root)
             root.update_idletasks()
+            if not any(name.casefold() in available_fonts for name in app.config.font_fallbacks):
+                self.assertEqual(tkfont.nametofont("TkDefaultFont").actual("family"), system_font)
             self.assertEqual(str(app.btn_run.cget("text")), "Create Interface Map")
+            self.assertTrue(hasattr(app, "analysis_menu"))
+            self.assertTrue(hasattr(app, "plugin_actions_frame"))
             self.assertTrue(hasattr(app, "btn_redraw"))
             self.assertTrue(hasattr(app, "entry_output_dir_basic"))
             app.close()
@@ -97,6 +117,9 @@ class GUIWorkflowTests(unittest.TestCase):
                 root.destroy()
             except tk.TclError:
                 pass
+
+
+
 
     def test_gui_auto_generation_keeps_the_user_override_empty(self):
         harness = _WorkflowHarness()
@@ -249,6 +272,39 @@ class _PlotFailureHarness(_PipelineHarness, PlotMixin):
     pass
 
 
+class DisplayFeedbackTests(unittest.TestCase):
+    def test_invalid_style_keeps_the_display_and_explains_how_to_retry(self):
+        from topoppi.errors import ConfigurationError
+
+        harness = _PlotFailureHarness(previous_result=True)
+        harness._busy = False
+        harness._pending_single_run = None
+        harness._capture_surface_camera = mock.Mock()
+        harness.get_style_config = mock.Mock(side_effect=ConfigurationError("Enter a numeric color limit."))
+        harness.display_feedback_var = _ValueHolder()
+        harness.display_feedback_label = mock.Mock()
+        previous = harness.current_fig
+
+        harness.redraw_plot()
+
+        self.assertIs(harness.current_fig, previous)
+        self.assertIn("Enter a numeric color limit", harness.display_feedback_var.value)
+        self.assertIn("Apply Style", harness.display_feedback_var.value)
+        harness.display_feedback_label.pack.assert_called_once()
+
+    def test_completed_mapping_retains_shared_geometry_for_displayed_result(self):
+        geometry = object()
+        harness = SimpleNamespace(_run_style=None, var_annotation_target=mock.Mock(),
+                                  _render_pending_result=mock.Mock())
+
+        WorkflowMixin.accept_pipeline_result(
+            harness, object(), [], {}, {"chain_a": "A", "chain_b": "B"}, prepared_interface=geometry,
+        )
+
+        self.assertIs(harness._pending_single_run["geometry"], geometry)
+        harness._render_pending_result.assert_called_once_with(style=None)
+
+
 class SingleRunPreflightTests(unittest.TestCase):
     @staticmethod
     def _params(**changes):
@@ -358,6 +414,28 @@ class SingleRunPreflightTests(unittest.TestCase):
         )
         self.assertEqual(harness.errors, ["stop after preflight"])
 
+    def test_optcuts_failure_is_reported_before_prolif_and_surface_work(self):
+        for failure in ("OptCuts binary not found", "OptCuts does not support residue-aware layouts"):
+            with self.subTest(failure=failure):
+                harness = _PipelineHarness()
+                loader = mock.Mock()
+                loader.get_protein_chain_ids.return_value = ["A", "B"]
+                loader.get_chain_data.return_value = ([1.0], [object()])
+                with (
+                    mock.patch("topoppi.gui_app.workflow_mixin.PDBLoader", return_value=loader),
+                    mock.patch("topoppi.gui_app.workflow_mixin.OptCutsUVOptimizer") as optimizer,
+                    mock.patch("topoppi.gui_app.workflow_mixin.sha256_file") as hash_input,
+                    mock.patch.object(harness, "resolve_prolif_interactions") as prolif,
+                    mock.patch("topoppi.gui_app.workflow_mixin.prepare_interface") as surface,
+                ):
+                    optimizer.return_value.preflight_binary.side_effect = RuntimeError(failure)
+                    harness.run_pipeline(self._params(), DEFAULT_RUN_CONFIG)
+                optimizer.return_value.preflight_binary.assert_called_once()
+                hash_input.assert_not_called()
+                prolif.assert_not_called()
+                surface.assert_not_called()
+                self.assertEqual(harness.errors, [failure])
+
     def test_auto_save_folder_is_created_before_structure_work(self):
         harness = _PipelineHarness()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -462,8 +540,9 @@ class _Figure:
         self.saved.append((path, kwargs))
 
 
-class _SaveHarness(UIMixin, PlotMixin):
+class _SaveHarness(UIMixin, PlotMixin, ExtensionsMixin):
     def __init__(self, successful_run):
+        self._gui_extensions = {}
         self._successful_single_run = successful_run
         self.current_fig = successful_run["figure"] if successful_run else None
         self.config = SimpleNamespace(figure_dpi=300)

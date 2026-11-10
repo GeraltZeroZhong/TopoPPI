@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "topoppi"
 dynamic = ["version"]
-description = "Protein-protein interaction interface mapping from 3D structures to 2D UV atlases."
+description = "Interactive protein-protein interface visualization with shared geometry and analysis plugins."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 license = "MIT"
@@ -41,6 +41,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Kept for existing install commands; Chemistry is included by default.
+chemistry = []
+hotspot = ["topoppi-hotspot>=3.0.0,<3.1"]
+affinity = [
+  "topoppi-affinity>=3.0.0,<3.1",
+]
+representation = [
+  "pandas>=2.0", "zstandard==0.25.0", "PyWavelets==1.8.0",
+  "DracoPy==2.2.0", "fast-simplification==0.2.0", "threadpoolctl>=3.0",
+]
+analysis = ["scikit-learn>=1.6,<1.8", "pandas>=2.0", "joblib>=1.5,<1.6"]
+neural-analysis = ["torch>=2.2"]
 benchmark = [
   "psutil>=5.9",
   "tqdm>=4.60",
@@ -71,6 +83,13 @@ topoppi = "topoppi.cli:main"
 topoppi-gui = "topoppi.gui:main"
 topoppi-benchmark = "topoppi.benchmark_cli:main"
 topoppi-install-optcuts = "topoppi.install_optcuts:main"
+topoppi-install-affinity = "topoppi.install_affinity:main"
+
+[project.entry-points."topoppi.plugins"]
+chemistry = "topoppi_chemistry.plugin:plugin"
+
+[project.entry-points."topoppi.chemistry.backends"]
+prolif = "topoppi_chemistry.backends.prolif:detect"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -80,9 +99,10 @@ version = {attr = "topoppi._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["topoppi", "topoppi.*", "topoppi_chemistry", "topoppi_chemistry.*", "topoppi_representation", "topoppi_representation.*"]
 
 [tool.setuptools.package-data]
-topoppi = ["assets/*.ico", "assets/*.png"]
+topoppi = ["assets/*.ico", "assets/*.png", "assets/*.json", "assets/examples/*.pdb", "assets/examples/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

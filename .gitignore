@@ -101,3 +101,12 @@ optcuts_frames/
 finalResult_mesh.obj
 finalResult.png
 output/
+.storage/
+
+/.internal/
+
+# Local authoring and account-tool boundaries
+/AGENTS.md
+/.agents/
+/.codex/
+/.aws/

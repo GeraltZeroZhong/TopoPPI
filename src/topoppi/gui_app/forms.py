@@ -247,9 +247,7 @@ def parse_single_run_form(raw: Mapping[str, object]) -> SingleRunForm:
         chain_a=chain_a,
         chain_b=chain_b,
         prolif=prolif,
-        interaction_source=_choice(
-            raw.get("interaction_source", "prolif"), "Interaction source", {"prolif", "geometric"}
-        ),
+        interaction_source=_optional_text(raw.get("interaction_source", "prolif")),
         map_style=_choice(raw.get("map_style", "markers"), "Map style", {"markers", "footprints"}),
         cutoff=_parse_float(
             raw.get("cutoff", DEFAULT_GUI_CONFIG.default_patch_cutoff),

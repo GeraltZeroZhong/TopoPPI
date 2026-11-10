@@ -74,6 +74,7 @@ jobs:
           python -m pip install --no-compile "prolif>=2.0"
           python -m pip install --no-compile --no-deps .
           python -c "import MDAnalysis, igl, prolif, rdkit, topoppi; print(topoppi.__version__)"
+          python -I tests/core_install_smoke.py
           python -m topoppi.cli --help
 
       - name: Build native OptCuts
@@ -119,8 +120,8 @@ jobs:
           MPLBACKEND: Agg
         run: |
           output="$RUNNER_TEMP/topoppi-macos-smoke.png"
-          python -m topoppi.cli tests/fixtures/1bvk.pdb -A A -B B \
-            --prolif tests/fixtures/prolif_interactions.json \
+          python -m topoppi.cli tests/fixtures/synthetic_complex.pdb -A A -B B \
+            --interaction-source geometric \
             --min-points 1 \
             --optcuts-bin "release-assets/OptCuts_bin-macos-${{ matrix.architecture }}" \
             -o "$output"
@@ -179,15 +180,16 @@ jobs:
           install -m 755 "$resources/OptCuts_bin" "$runtime/OptCuts_bin"
           "$runtime/environment/bin/python" -c \
             "import MDAnalysis, igl, prolif, rdkit, tkinter, topoppi; assert tkinter.Tcl().eval('info patchlevel'); assert topoppi.__version__ == '${{ steps.version.outputs.value }}'"
+          "$runtime/environment/bin/python" -I tests/core_install_smoke.py
           "$runtime/environment/bin/python" - <<'PY'
           import tkinter as tk
 
-          from topoppi.gui_app import ProtSurfApp
+          from topoppi.gui_app import InterfaceApp
 
           root = tk.Tk()
           root.withdraw()
           try:
-              ProtSurfApp(root)
+              InterfaceApp(root)
               root.update_idletasks()
           finally:
               root.destroy()
@@ -214,8 +216,8 @@ jobs:
           output="$RUNNER_TEMP/topoppi-packaged-smoke.png"
           atlas="$RUNNER_TEMP/topoppi-packaged-smoke.npz"
           "$runtime/environment/bin/python" -m topoppi.cli \
-            tests/fixtures/1bvk.pdb -A A -B B \
-            --prolif tests/fixtures/prolif_interactions.json \
+            tests/fixtures/synthetic_complex.pdb -A A -B B \
+            --interaction-source geometric \
             --min-points 1 \
             --optcuts-bin "$runtime/OptCuts_bin" \
             --map-style footprints --export-atlas "$atlas" \

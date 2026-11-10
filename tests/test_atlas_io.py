@@ -1,3 +1,4 @@
+import io
 import tempfile
 import unittest
 from dataclasses import replace
@@ -106,6 +107,30 @@ class AtlasIOTests(unittest.TestCase):
             path = Path(tmp) / "other.npz"
             np.savez(path, uv=np.zeros((1, 3, 2)))
             with self.assertRaisesRegex(ValueError, "not a TopoPPI atlas"):
+                load_atlas(path)
+
+    def test_invalid_and_incomplete_atlas_files_explain_how_to_recover(self):
+        array_file = io.BytesIO()
+        np.save(array_file, np.zeros((2, 3)))
+        archive = io.BytesIO()
+        np.savez_compressed(archive, document_json=np.asarray('{}'))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broken.npz"
+            for payload in (b"not an atlas", b"", array_file.getvalue(), archive.getvalue()[:100]):
+                with self.subTest(payload=payload[:12]):
+                    path.write_bytes(payload)
+                    with self.assertRaises(ValueError) as result:
+                        load_atlas(path)
+                    message = str(result.exception)
+                    self.assertIn("Save Atlas or --export-atlas", message)
+                    self.assertIn("export it again or obtain a complete copy", message)
+                    self.assertNotIn("pickle", message)
+
+    def test_valid_archive_keeps_the_specific_unsupported_format_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "unsupported.npz"
+            np.savez(path, document_json=np.asarray('{"format":"topoppi-atlas","version":99}'))
+            with self.assertRaisesRegex(ValueError, "Unsupported TopoPPI atlas format"):
                 load_atlas(path)
 
     def test_cli_render_reuses_uv_and_saves_updated_highlight_style(self):

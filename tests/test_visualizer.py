@@ -39,11 +39,11 @@ class VisualizerTests(unittest.TestCase):
 
     def test_map_title_identifies_the_structure_and_chain_direction(self):
         visualizer = object.__new__(InterfaceVisualizer)
-        visualizer.structure_label = "1bvk"
+        visualizer.structure_label = "synthetic_complex"
         visualizer.chain_a_id = "A"
         visualizer.chain_b_id = "B"
 
-        self.assertEqual(visualizer._map_title(), "1bvk - surface A / partner B")
+        self.assertEqual(visualizer._map_title(), "synthetic_complex - surface A / partner B")
 
     def test_fragmented_residue_is_drawn_at_each_footprint_piece(self):
         loader = PDBLoader(FIXTURES / "tiny_complex.pdb")
@@ -362,7 +362,7 @@ class VisualizerTests(unittest.TestCase):
             chain_b_id="B",
         )
 
-        with self.assertRaisesRegex(ValueError, "requires a ProLIF JSON"):
+        with self.assertRaisesRegex(ValueError, "requires an interaction JSON"):
             visualizer.plot_patches(
                 [self._two_residue_patch()],
                 show=False,

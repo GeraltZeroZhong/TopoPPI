@@ -9,6 +9,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class PDBLoaderTests(unittest.TestCase):
+    def test_empty_structure_reports_coordinate_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text, message in [
+                ("empty.pdb", "END\n", "no coordinate model"),
+                ("empty.cif", "data_empty\n#\n", "required coordinate field"),
+            ]:
+                with self.subTest(name=name):
+                    path = Path(tmp) / name
+                    path.write_text(text)
+                    with self.assertRaisesRegex(ValueError, message):
+                        PDBLoader(path)
+
     def test_plddt_summary_gives_each_residue_one_vote(self):
         pdb_text = (
             "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 60.00           C  \n"
@@ -45,14 +57,14 @@ class PDBLoaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             loader.get_chain_data("Z")
 
-    def test_1bvk_fixture_is_available(self):
-        loader = PDBLoader(str(FIXTURES / "1bvk.pdb"))
+    def test_synthetic_fixture_has_complete_heavy_atom_records(self):
+        loader = PDBLoader(str(FIXTURES / "synthetic_complex.pdb"))
 
-        self.assertEqual(loader.get_protein_chain_ids(), ["A", "B", "C", "D", "E", "F"])
-        self.assertEqual(loader.get_chain_residue_count("A"), 108)
+        self.assertEqual(loader.get_protein_chain_ids(), ["A", "B"])
+        self.assertEqual(loader.get_chain_residue_count("A"), 2)
         coords_a, atoms_a = loader.get_chain_data("A")
-        self.assertEqual(coords_a.shape, (843, 3))
-        self.assertEqual(len(atoms_a), 843)
+        self.assertEqual(coords_a.shape, (17, 3))
+        self.assertEqual(len(atoms_a), 17)
 
     def test_auto_contact_chain_selection_is_deterministic_and_audited(self):
         loader = PDBLoader(str(FIXTURES / "tiny_complex.pdb"))

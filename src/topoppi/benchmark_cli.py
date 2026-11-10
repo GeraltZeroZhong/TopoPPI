@@ -180,6 +180,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command in {"preflight", "preflight-sensitivity"} and args.output_json:
+            source = args.config if args.command == "preflight" else args.plan
+            if Path(args.output_json).expanduser().resolve() == Path(source).expanduser().resolve():
+                raise ValueError("Choose a preflight report path separate from the input configuration or plan.")
         if args.command == "preflight":
             output = BenchmarkRunner(load_benchmark_config(args.config)).preflight()
             state = "ready" if output["ready"] else "blocked"

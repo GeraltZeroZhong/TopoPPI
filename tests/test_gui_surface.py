@@ -15,7 +15,7 @@ from matplotlib.colors import to_rgba
 
 from topoppi.atlas.uv import set_uv_layout
 from topoppi.config import VisualizationConfig
-from topoppi.gui_app.app import ProtSurfApp
+from topoppi.gui_app.app import InterfaceApp
 from topoppi.io.io_loader import PDBLoader
 from topoppi.visualization.atlas_io import load_atlas
 from topoppi.visualization.visualizer import InterfaceVisualizer
@@ -28,8 +28,8 @@ class SurfaceDesktopTests(unittest.TestCase):
     def setUp(self):
         self.root = tk.Tk()
         self.root.withdraw()
-        with mock.patch.object(ProtSurfApp, "_load_recent_items"):
-            self.app = ProtSurfApp(self.root)
+        with mock.patch.object(InterfaceApp, "_load_recent_items"):
+            self.app = InterfaceApp(self.root)
         self.app._remember_recent_file = lambda _path: None
         self.app._remember_recent_output_dir = lambda _path: None
         self.app.combo_map_style.set("Residue footprints")
@@ -110,6 +110,51 @@ class SurfaceDesktopTests(unittest.TestCase):
             self.assertAlmostEqual(restored.azim, 18.)
             optimizer.assert_not_called()
         self.errors.assert_not_called()
+
+    def test_tab_past_highlights_does_not_jump_to_the_rebuilt_plot(self):
+        self.root.deiconify()
+        self.root.geometry("960x600")
+        self.render()
+        self.app.var_settings_page.set("appearance")
+        self.app._sync_settings_page()
+        entry = next(widget for widget in self.app.footprint_controls.winfo_children()
+                     if widget.winfo_class() == "TEntry")
+        entry.focus_force()
+        self.root.update()
+        self.app.var_highlight_residues.set("A:GLY:1")
+        previous_figure = self.app.current_fig
+        next_control = entry.tk_focusNext()
+        entry.event_generate("<Tab>")
+        self.root.update()
+        self.assertIsNot(self.app.current_fig, previous_figure)
+        self.assertIs(self.root.focus_get(), next_control)
+        for _ in range(40):
+            focused = self.root.focus_get()
+            if focused is self.app.combo_style_preset:
+                break
+            focused.event_generate("<Tab>")
+            self.root.update()
+        self.assertIs(self.root.focus_get(), self.app.combo_style_preset)
+        top = self.app.sidebar_canvas.winfo_rooty()
+        self.assertGreaterEqual(self.app.combo_style_preset.winfo_rooty(), top)
+        self.assertLessEqual(self.app.combo_style_preset.winfo_rooty() + self.app.combo_style_preset.winfo_height(),
+                             top + self.app.sidebar_canvas.winfo_height())
+
+    def test_enter_applies_highlights_once_and_keeps_the_editor_focused(self):
+        self.root.deiconify()
+        self.render()
+        self.app.var_settings_page.set("appearance")
+        self.app._sync_settings_page()
+        entry = next(widget for widget in self.app.footprint_controls.winfo_children()
+                     if widget.winfo_class() == "TEntry")
+        entry.focus_force()
+        self.root.update()
+        self.app.var_highlight_residues.set("A:GLY:1")
+        with mock.patch.object(self.app, "redraw_plot", wraps=self.app.redraw_plot) as redraw:
+            entry.event_generate("<Return>")
+            self.root.update()
+            self.assertEqual(redraw.call_count, 1)
+        self.assertIs(self.root.focus_get(), entry)
 
     def test_save_reopen_and_reset_use_the_current_camera(self):
         figure = self.render()

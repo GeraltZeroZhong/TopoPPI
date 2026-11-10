@@ -1,15 +1,18 @@
 # Windows installer
 
-TopoPPI 2.1 provides a bootstrap installer for 64-bit Windows:
+This guide describes TopoPPI 3.0.0 source builds and installation. Build the current
+checkout using the [local instructions](#build-locally); the setup filename uses
+the version stored in the source tree:
 
 ```text
-TopoPPI-2.1-windows-x86_64-setup.exe
+TopoPPI-<version>-windows-x86_64-setup.exe
 ```
 
-Download it from the [v2.1 release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1),
-or follow the [local build instructions](#build-locally).
+The TopoPPI paper uses **v2.1**. Its [release](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v2.1)
+and [version-specific Windows instructions](https://github.com/GeraltZeroZhong/TopoPPI/blob/v2.1/installer/windows/README.md)
+remain available. Select the matching release when reproducing that version.
 
-The setup program creates a private Python 3.10 environment under
+The setup program creates a dedicated Python 3.10 environment under
 `%LOCALAPPDATA%\TopoPPI`, installs TopoPPI and its scientific dependencies,
 copies the matching OptCuts executable, and creates Start Menu shortcuts.
 
@@ -29,13 +32,28 @@ routine analysis of local structures works without a network connection.
 
 The GUI shortcut uses `pythonw.exe`, so regular desktop launches stay free of a
 console window. **TopoPPI Command Prompt** opens a persistent terminal with the
-private environment and OptCuts ready to use. Run `topoppi --help` there to see
+dedicated environment and OptCuts ready to use. Run `topoppi --help` there to see
 the commands. `TopoPPI CLI.cmd` remains in the installation folder as a direct
 wrapper for scripts and automation. Both command launchers resolve paths from
 their installation folder, including folders with spaces and Unicode characters.
 
 TopoPPI and OptCuts license files are installed under
 `%LOCALAPPDATA%\TopoPPI\licenses`.
+
+## Binding analysis in 3.0
+
+Choose **Binding analysis...** for **Binding affinity**, **Mutation effects**, or
+**Rank hotspots**. Affinity supplies the first two tasks; Hotspot supplies the
+third. Install the matching plugin wheels through **Plugins → Manage Plugins...
+→ Install from file...**. The plugins use the
+application's Python environment and include one official CPU model per task.
+Their bundled parameters support offline prediction from local structures.
+
+The [desktop guide](../../docs/desktop.md#binding-analysis) covers the three
+workflows and residue-to-variant selection. The [Affinity guide](../../plugins/affinity/docs/workflow.md)
+and [Hotspot guide](../../plugins/hotspot/README.md) describe outputs, model scope,
+and optional custom models. Advanced neural models use their separately
+installed dependencies and declared resources.
 
 ## Upgrade
 
@@ -51,7 +69,7 @@ reinstalls the TopoPPI package, and recopies OptCuts.
 
 If the GUI itself cannot start, it shows the location of
 `%LOCALAPPDATA%\TopoPPI\gui-startup.log`. That file contains the Python startup
-error for the repair report.
+error.
 
 If setup stops:
 
@@ -62,13 +80,12 @@ If setup stops:
    `%LOCALAPPDATA%\TopoPPI`, and start a fresh installation.
 
 Setup reports the PowerShell exit code when an installation step needs attention.
-After successful setup, the environment and Start Menu launchers are ready to use.
 
 ## Uninstall
 
 Close the GUI and any TopoPPI command prompts, then use **Settings > Apps >
 Installed apps > TopoPPI > Uninstall** or the **Uninstall TopoPPI** Start Menu
-shortcut. This removes the private environment, OptCuts, launchers, and
+shortcut. This removes the dedicated environment, OptCuts, launchers, and
 installer files.
 
 TopoPPI leaves analysis output in the folders you selected. The recent-file list
@@ -79,6 +96,7 @@ folder when you also want to clear that preference data.
 
 Install these tools on a 64-bit Windows development machine:
 
+- Python 3.10, available as `python` on PATH
 - Git
 - CMake
 - Visual Studio 2022 with the **Desktop development with C++** workload
@@ -90,41 +108,25 @@ checkout on the same computer:
 
 ```powershell
 $packageSource = (Resolve-Path .).Path
+$topoppiVersion = python -c "import runpy; print(runpy.run_path('src/topoppi/_version.py')['__version__'])"
 .\tools\OptCuts\build_windows_optcuts.ps1 -OutputDir installer\windows
 Push-Location installer\windows
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
-  /DMyAppVersion=2.1 `
+  "/DMyAppVersion=$topoppiVersion" `
   "/DMyPackageSpec=$packageSource" `
   TopoPPI.iss
 Pop-Location
 ```
 
-This local installer reads the source checkout during setup. For an installer
-distributed to other computers, set `MyPackageSpec` to the source archive of a
-published commit or tag. The v2.1 package spec can be `topoppi==2.1` or its tag archive:
-
-```text
-https://github.com/GeraltZeroZhong/TopoPPI/archive/refs/tags/v2.1.zip
-```
+This local installer reads the source checkout during setup. A distributed
+installer uses `MyPackageSpec` for the source archive of its matching published
+commit or tag. Keep the installer version and installed package version aligned.
+For the v2.1 paper release, use the build instructions stored at the v2.1 tag.
 
 The setup executable is written to `installer/windows/Output/`.
 
-## Release contract
+## Packaged components
 
-The setup executable embeds:
+The setup executable includes `OptCuts_bin-windows-x86_64.exe`. A local build that omits it downloads the matching GitHub release asset and checks its supplied SHA-256 sidecar during setup.
 
-```text
-OptCuts_bin-windows-x86_64.exe
-```
-
-When a local builder omits that file, the bootstrap downloads the matching
-GitHub release asset and validates it with
-`OptCuts_bin-windows-x86_64.exe.sha256`.
-
-The `Windows Installer` workflow builds native OptCuts and the versioned setup
-program. Its installed-app smoke uses a directory with spaces and Unicode
-characters, launches the configured command prompt, creates a footprint map,
-reopens its atlas, edits it in Tk, and saves the figure and atlas. It also checks
-removal. The installer, OptCuts executable and checksum sidecar then pass to
-the central `Publish` workflow. Tagged builds install that tag's source archive;
-publication follows completion of the platform and PyPI checks.
+The `Windows Installer` workflow builds the native executable and installer, then exercises the installed command prompt, mapping, atlas editing, export and removal. Tagged installers use that tag’s source archive. The installer and native executable are published together after the package and platform jobs succeed.

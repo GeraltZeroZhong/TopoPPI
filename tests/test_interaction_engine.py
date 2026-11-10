@@ -8,19 +8,40 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
+import pytest
 from Bio.PDB import MMCIFIO, PDBParser
 
 from topoppi.interactions.interaction_engine import (
     INTERACTION_SCHEMA_VERSION,
-    _mda_to_prolif_with_explicit_hydrogen,
-    _to_records,
     generate_prolif_interactions,
     load_prolif_document,
     load_prolif_partner_map,
 )
 from topoppi.io.io_loader import PDBLoader
+from topoppi_chemistry.backends.prolif import (
+    _mda_to_prolif_with_explicit_hydrogen,
+    _prolif_structure_input,
+    _to_records,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def chemistry_provider(monkeypatch):
+    """Source tests register the same provider and entry point as the wheel."""
+    from importlib.metadata import EntryPoint
+
+    from topoppi import plugins
+    from topoppi_chemistry import api
+    from topoppi_chemistry.plugin import plugin
+
+    registry = plugins.PluginRegistry(entry_points=())
+    registry.register_plugin(plugin)
+    monkeypatch.setattr(plugins, "_default_registry", registry)
+    monkeypatch.setattr(api, "_backend_entry_points", lambda: (
+        EntryPoint(name="prolif", value="topoppi_chemistry.backends.prolif:detect", group=api.BACKEND_ENTRY_POINT_GROUP),
+    ))
 
 
 class InteractionEngineTests(unittest.TestCase):
@@ -36,7 +57,7 @@ class InteractionEngineTests(unittest.TestCase):
             ),
         ):
             result = generate_prolif_interactions(
-                FIXTURES / "1bvk.pdb", "A", "B", output_dir=output_dir,
+                FIXTURES / "synthetic_complex.pdb", "A", "B", output_dir=output_dir,
             )
             payload = json.loads(Path(result).read_text(encoding="utf-8"))
             self.assertTrue(payload["interactions"])
@@ -46,7 +67,7 @@ class InteractionEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for suffix, chain_a, chain_b in ((".cif", "A", "B"), (".mmcif", "surface", "partner")):
                 with self.subTest(suffix=suffix, chain_a=chain_a, chain_b=chain_b):
-                    structure = PDBParser(QUIET=True).get_structure("complex", FIXTURES / "1bvk.pdb")
+                    structure = PDBParser(QUIET=True).get_structure("complex", FIXTURES / "synthetic_complex.pdb")
                     if len(chain_a) > 1:
                         structure[0]["A"].id = chain_a
                         structure[0]["B"].id = chain_b
@@ -74,7 +95,7 @@ class InteractionEngineTests(unittest.TestCase):
         import MDAnalysis as mda
         from rdkit import Chem
 
-        universe = mda.Universe(FIXTURES / "1bvk.pdb")
+        universe = mda.Universe(FIXTURES / "synthetic_complex.pdb")
         source = universe.select_atoms("chainID A")
         source_coordinates = source.positions.copy()
         source_atom_count = source.n_atoms
@@ -110,8 +131,77 @@ class InteractionEngineTests(unittest.TestCase):
         )
         self.assertFalse(any("hydrogen atom" in str(item.message).lower() for item in caught))
 
-    def test_explicit_hydrogen_preparation_invalidates_old_sidecars(self):
-        self.assertEqual(INTERACTION_SCHEMA_VERSION, 3)
+    def test_selected_atom_preparation_invalidates_old_sidecars(self):
+        self.assertEqual(INTERACTION_SCHEMA_VERSION, 4)
+
+    def test_prolif_and_surface_use_identical_selected_conformers_for_pdb_and_mmcif(self):
+        import MDAnalysis as mda
+        import prolif as plf
+
+        lines = (FIXTURES / "synthetic_complex.pdb").read_text().splitlines()
+        index = next(i for i, line in enumerate(lines)
+                     if line.startswith("ATOM") and line[21] == "A" and line[12:16].strip() == "CA")
+        original = lines[index]
+        x = float(original[30:38])
+        a = original[:16] + "A" + original[17:54] + "  0.20" + original[60:]
+        b = (original[:6] + "99999" + original[11:16] + "B" + original[17:30]
+             + f"{x + .25:8.3f}" + original[38:54] + "  0.80" + original[60:])
+        lines[index:index + 1] = [a, b]
+        # A B-only atom must also survive RDKit's alternate-location handling.
+        n_index = next(i for i, line in enumerate(lines)
+                       if line.startswith("ATOM") and line[21] == "A" and line[12:16].strip() == "N")
+        lines[n_index] = lines[n_index][:16] + "B" + lines[n_index][17:]
+        with tempfile.TemporaryDirectory() as tmp:
+            pdb = Path(tmp) / "alternate.pdb"
+            pdb.write_text("\n".join(lines) + "\n")
+            structure = PDBParser(QUIET=True).get_structure("input", pdb)
+            structure[0]["A"].id, structure[0]["B"].id = "surface", "partner"
+            cif = Path(tmp) / "alternate.mmcif"
+            writer = MMCIFIO()
+            writer.set_structure(structure)
+            writer.save(str(cif))
+            for path, chain_a, chain_b in ((pdb, "A", "B"), (cif, "surface", "partner")):
+                with self.subTest(format=path.suffix):
+                    original_bytes = path.read_bytes()
+                    coords, atoms = PDBLoader(path).get_chain_data(chain_a)
+                    expected = {(atom.get_name(), atom.get_parent().get_resname(), atom.get_parent().id[1],
+                                 atom.get_parent().id[2].strip()): xyz for atom, xyz in zip(atoms, coords, strict=True)}
+                    self.assertEqual(atoms[0].get_altloc(), "B")
+                    with _prolif_structure_input(path, chain_a, chain_b) as (selected_path, selected_a, _selected_b):
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            group = mda.Universe(selected_path).select_atoms(f"chainID {selected_a}")
+                            molecule = _mda_to_prolif_with_explicit_hydrogen(group, chain_a, plf, logging.getLogger())
+                    observed = {}
+                    for atom in molecule.GetAtoms():
+                        if atom.GetAtomicNum() == 1:
+                            continue
+                        info = atom.GetPDBResidueInfo()
+                        key = (info.GetName().strip(), info.GetResidueName().strip(),
+                               info.GetResidueNumber(), info.GetInsertionCode().strip())
+                        position = molecule.GetConformer().GetAtomPosition(atom.GetIdx())
+                        observed[key] = [position.x, position.y, position.z]
+                        self.assertFalse(info.GetAltLoc().strip())
+                    self.assertEqual(set(observed), set(expected))
+                    for key, xyz in expected.items():
+                        np.testing.assert_allclose(observed[key], xyz, atol=1e-4, rtol=0)
+                    self.assertEqual(path.read_bytes(), original_bytes)
+
+    def test_previous_interaction_schema_is_regenerated_and_current_schema_is_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = Path(tmp) / "synthetic_complex.A-B.prolif.json"
+            sidecar.write_text(json.dumps({"source_sha256": "same-source", "interaction_schema_version": 3,
+                                          "interactions": [{"obsolete": True}]}))
+            output = generate_prolif_interactions(FIXTURES / "synthetic_complex.pdb", "A", "B",
+                                                 output_dir=tmp, source_sha256="same-source")
+            payload = json.loads(Path(output).read_text())
+            self.assertEqual(payload["interaction_schema_version"], INTERACTION_SCHEMA_VERSION)
+            self.assertTrue(payload["interactions"])
+            self.assertNotIn("obsolete", payload["interactions"][0])
+            with mock.patch("topoppi_chemistry.backends.prolif._prolif_structure_input",
+                            side_effect=AssertionError("Current cache should be reused")):
+                self.assertEqual(generate_prolif_interactions(FIXTURES / "synthetic_complex.pdb", "A", "B",
+                                 output_dir=tmp, source_sha256="same-source"), output)
 
     def test_load_prolif_document_normalizes_records(self):
         _payload, residue_types, partners = load_prolif_document(str(FIXTURES / "prolif_interactions.json"))

@@ -12,11 +12,21 @@ from topoppi.config import (
     TopologyConfig,
     TopoPPIRunConfig,
     VisualizationConfig,
+    benchmark_config_from_dict,
 )
 from topoppi.errors import ConfigurationError
 
 
 class ConfigTests(unittest.TestCase):
+    def test_partial_benchmark_optcuts_config_keeps_headless_default(self):
+        payload = {"input_folder": ".", "output_root": "results"}
+        for optcuts in ({}, {"optcuts_bin": "custom/OptCuts_bin"}, {"optcuts_headless_mode": 110}):
+            with self.subTest(optcuts=optcuts):
+                config = benchmark_config_from_dict({**payload, "optcuts": optcuts})
+                self.assertEqual(config.optcuts.optcuts_mode, config.optcuts.optcuts_headless_mode)
+        explicit = benchmark_config_from_dict({**payload, "optcuts": {"optcuts_mode": 10}})
+        self.assertEqual(explicit.optcuts.optcuts_mode, 10)
+
     def test_surface_camera_accepts_finite_angles_and_positive_zoom(self):
         VisualizationConfig(view="surface", surface_projection="perspective", surface_elevation=-25.,
                             surface_azimuth=450., surface_zoom=1.5, show_mesh=False).validate()
@@ -35,6 +45,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(DEFAULT_RUN_CONFIG.optcuts.residue_fragmentation_weight, 20.0)
         self.assertEqual(TopoPPIRunConfig().optcuts.residue_fragmentation_weight, 20.0)
         self.assertEqual(OptCutsConfig().residue_fragmentation_weight, 0.0)
+        self.assertEqual(TopoPPIRunConfig().optcuts.optcuts_mode, OptCutsConfig().optcuts_headless_mode)
+        self.assertEqual(OptCutsConfig().optcuts_mode, 10)
         self.assertEqual(DEFAULT_RUN_CONFIG.visualization.residue_scope, "interaction")
         self.assertTrue(DEFAULT_RUN_CONFIG.visualization.color_by_interaction_type)
         self.assertFalse(DEFAULT_RUN_CONFIG.visualization.use_geometric_interaction_fallback)

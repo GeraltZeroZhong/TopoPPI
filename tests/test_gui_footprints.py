@@ -19,7 +19,7 @@ from matplotlib.colors import to_rgba
 
 from topoppi.atlas.uv import set_uv_layout
 from topoppi.config import OptCutsConfig, VisualizationConfig
-from topoppi.gui_app.app import ProtSurfApp
+from topoppi.gui_app.app import InterfaceApp
 from topoppi.gui_app.forms import parse_single_run_form
 from topoppi.gui_app.workflow_mixin import WorkflowMixin
 from topoppi.io.io_loader import PDBLoader
@@ -117,9 +117,9 @@ class FootprintFormTests(unittest.TestCase):
         with (
             mock.patch("topoppi.gui_app.workflow_mixin.OptCutsUVOptimizer"),
             mock.patch("topoppi.gui_app.workflow_mixin.generate_prolif_interactions") as prolif,
-            mock.patch("topoppi.gui_app.workflow_mixin.SurfaceGenerator") as surface,
+            mock.patch("topoppi.gui_app.workflow_mixin.prepare_interface") as surface,
         ):
-            surface.return_value.generate_mesh.side_effect = RuntimeError("Reached surface generation")
+            surface.side_effect = RuntimeError("Reached surface generation")
             harness.run_pipeline(form.to_params(), form.to_config())
         prolif.assert_not_called()
         surface.assert_called_once()
@@ -135,7 +135,7 @@ class FootprintDesktopTests(unittest.TestCase):
         self.addCleanup(error_dialog.stop)
         self.root = tk.Tk()
         self.root.withdraw()
-        self.app = ProtSurfApp(self.root)
+        self.app = InterfaceApp(self.root)
         self.app.combo_map_style.set("Residue footprints")
         self.app.combo_residue_scope.set("Full patch context")
         self.app.var_avoid_overlap.set(False)
@@ -193,6 +193,32 @@ class FootprintDesktopTests(unittest.TestCase):
         with mock.patch("topoppi.gui_app.plot_mixin.colorchooser.askcolor", return_value=(None, "#336699")):
             self.app.on_pick(SimpleNamespace(artist=objects["collection"]))
         np.testing.assert_allclose(objects["collection"].get_facecolor()[0], to_rgba("#336699"))
+
+    def test_failed_auto_save_warns_and_keeps_the_map_available_for_manual_save(self):
+        self.render()
+        result = self.app._successful_single_run
+        with tempfile.TemporaryDirectory() as folder:
+            params = dict(result["params"], auto_save=True, output_dir=folder)
+            with (
+                mock.patch("topoppi.visualization.export.save_figure", side_effect=OSError("No space left on device")),
+                mock.patch("topoppi.gui_app.plot_mixin.messagebox.showwarning") as warning,
+            ):
+                self.app.accept_pipeline_result(result["viz"], result["patches"], result["manifest"], params)
+            warning.assert_called_once()
+            self.assertIn("Save Figure", warning.call_args.args[1])
+            self.assertIn("Save Atlas", warning.call_args.args[1])
+            self.assertIn("No space left on device", warning.call_args.args[1])
+            self.assertIsNotNone(self.app.current_fig)
+            self.assertFalse(self.app._busy)
+            self.assertNotIn("disabled", self.app.btn_save.state())
+            destination = str(Path(folder) / "recovered.png")
+            with (
+                mock.patch("topoppi.gui_app.ui_mixin.filedialog.asksaveasfilename", return_value=destination),
+                mock.patch("topoppi.gui_app.ui_mixin.messagebox.showinfo"),
+            ):
+                self.app.btn_save.invoke()
+            self.assertTrue(Path(destination).is_file())
+            self.assertTrue(Path(folder, "recovered.topoppi.json").is_file())
 
     def test_click_color_and_label_drag_survive_redraw_and_atlas_reopen(self):
         visualizer = self.render()
@@ -301,6 +327,20 @@ class FootprintDesktopTests(unittest.TestCase):
         self.assertIs(self.app._successful_single_run["viz"], new_viz)
         self.assertIsNone(self.app._pending_single_run)
 
+    def test_invalid_appearance_has_visible_feedback_and_preserves_actual_view(self):
+        self.render()
+        previous = self.app.current_fig
+        self.app.var_value_min.set("unfinished")
+        self.app.redraw_plot()
+        self.assertIs(self.app.current_fig, previous)
+        self.assertIn("color limits", self.app.display_feedback_var.get())
+        self.assertIn("Apply Style", self.app.display_feedback_var.get())
+        self.assertIn("2D atlas", self.app.map_context_var.get())
+        self.app.var_value_min.set("")
+        self.app.redraw_plot()
+        self.assertEqual(self.app.display_feedback_var.get(), "")
+        self.assertIsNot(self.app.current_fig, previous)
+
     def test_failed_next_run_preserves_previous_colors_and_label_edits(self):
         self.app.var_highlight_residues.set("A:GLY:1")
         viz = self.render()
@@ -401,11 +441,52 @@ class FootprintDesktopTests(unittest.TestCase):
             self.app._finish_task()
         self.assertEqual(self.app._run_style["annotation_values"], {"B:GLY:1": -0.7})
         self.assertEqual(self.app._run_style["highlight_residues"], ("B:GLY:1",))
-        self.assertIn("Canvas: tiny_complex.pdb | A to B", self.app.map_context_var.get())
+        self.assertIn("Displayed map: tiny_complex.pdb | A to B", self.app.map_context_var.get())
         self.assertIn("Next run: tiny_complex.pdb | B to A", self.app.map_context_var.get())
         self.app.clear_annotations()
         self.assertIsNone(self.app._next_run_annotations)
         self.assertEqual(self.app.annotation_values, {"A:GLY:1": 0.4})
+
+    def test_next_run_units_and_scale_do_not_change_current_map_or_saved_atlas(self):
+        self.app.annotation_values = {"A:GLY:1": 0.4}
+        self.render()
+        self.app.var_annotation_label.set("Current assay log2 enrichment")
+        self.app.var_value_min.set("-1")
+        self.app.var_value_max.set("1")
+        self.app._annotation_style_changed()
+        self.app.var_input_path.set(str(FIXTURE))
+        self.app.var_chain_a.set("B")
+        self.app.var_chain_b.set("A")
+        self.app.var_annotation_target.set("Next run")
+        self.app._annotation_target_changed()
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path = Path(directory) / "next.csv"
+            csv_path.write_text("residue,value\nB:1,-0.7\n", encoding="utf-8")
+            with mock.patch("topoppi.gui_app.ui_mixin.filedialog.askopenfilename", return_value=str(csv_path)):
+                self.app.browse_annotations()
+            self.app.var_annotation_label.set("Next assay percent change")
+            self.app.var_value_min.set("-4")
+            self.app.var_value_max.set("4")
+            self.app._annotation_style_changed()
+            self.app.redraw_plot()
+            current = self.app._successful_single_run["style"]
+            self.assertEqual(current["annotation_label"], "Current assay log2 enrichment")
+            self.assertEqual((current["value_min"], current["value_max"]), (-1, 1))
+            self.assertEqual(current["annotation_values"], {"A:GLY:1": 0.4})
+            saved = Path(directory) / "current.atlas.npz"
+            with mock.patch("topoppi.gui_app.ui_mixin.filedialog.asksaveasfilename", return_value=str(saved)):
+                self.app.save_atlas()
+            self.assertEqual(load_atlas(saved).style["annotation_label"], "Current assay log2 enrichment")
+            self.app.var_annotation_target.set("Current map")
+            self.app._annotation_target_changed()
+            self.assertEqual(self.app.var_annotation_label.get(), "Current assay log2 enrichment")
+            with mock.patch("topoppi.gui_app.ui_mixin.threading.Thread") as thread:
+                thread.return_value.is_alive.return_value = False
+                self.app.start_analysis()
+            self.app._finish_task()
+            self.assertEqual(self.app._run_style["annotation_label"], "Next assay percent change")
+            self.assertEqual((self.app._run_style["value_min"], self.app._run_style["value_max"]), (-4, 4))
+            self.assertEqual(self.app._run_style["annotation_values"], {"B:GLY:1": -0.7})
 
     def test_successful_run_stores_effective_marker_threshold_for_atlas_reuse(self):
         self.render()
