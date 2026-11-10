@@ -1,5 +1,8 @@
 """Independent fixtures and explicit local plugin registration for source tests."""
+import matplotlib
 import pytest
+
+matplotlib.use("Agg")
 
 
 @pytest.fixture(autouse=True)
