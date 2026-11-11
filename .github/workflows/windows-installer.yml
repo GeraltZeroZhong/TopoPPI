@@ -129,7 +129,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "The installed Python environment could not import the application stack."
           }
-          & $python -I tests\core_install_smoke.py
+          & $python -I tests\core_install_smoke.py --allow-scikit-learn
           if ($LASTEXITCODE -ne 0) {
             throw "The default Chemistry plugin failed its installed capability smoke."
           }
