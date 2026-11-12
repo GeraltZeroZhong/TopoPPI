@@ -74,7 +74,7 @@ jobs:
           python -m pip install --no-compile "prolif>=2.0"
           python -m pip install --no-compile --no-deps .
           python -c "import MDAnalysis, igl, prolif, rdkit, topoppi; print(topoppi.__version__)"
-          python -I tests/core_install_smoke.py
+          python -I tests/core_install_smoke.py --allow-scikit-learn
           python -m topoppi.cli --help
 
       - name: Build native OptCuts
@@ -180,7 +180,7 @@ jobs:
           install -m 755 "$resources/OptCuts_bin" "$runtime/OptCuts_bin"
           "$runtime/environment/bin/python" -c \
             "import MDAnalysis, igl, prolif, rdkit, tkinter, topoppi; assert tkinter.Tcl().eval('info patchlevel'); assert topoppi.__version__ == '${{ steps.version.outputs.value }}'"
-          "$runtime/environment/bin/python" -I tests/core_install_smoke.py
+          "$runtime/environment/bin/python" -I tests/core_install_smoke.py --allow-scikit-learn
           "$runtime/environment/bin/python" - <<'PY'
           import tkinter as tk
 
