@@ -29,6 +29,19 @@ jobs:
             throw "Tag $env:GITHUB_REF_NAME does not match package version v$version."
           }
 
+      - name: Build matching plugin wheels
+        shell: pwsh
+        run: |
+          python -m pip install build
+          if ($LASTEXITCODE -ne 0) { throw "Could not install the wheel build tool." }
+          $wheelDir = Join-Path $env:RUNNER_TEMP "binding-wheels"
+          foreach ($plugin in @("affinity", "hotspot")) {
+            python -m build --wheel "plugins/$plugin" --outdir $wheelDir
+            if ($LASTEXITCODE -ne 0) { throw "Could not build the $plugin plugin wheel." }
+            $wheel = Join-Path $wheelDir "topoppi_${plugin}-${{ steps.version.outputs.value }}-py3-none-any.whl"
+            if (!(Test-Path $wheel)) { throw "Plugin wheel version does not match Core: $wheel" }
+          }
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -134,6 +147,23 @@ jobs:
             throw "The default Chemistry plugin failed its installed capability smoke."
           }
 
+          $numericSmoke = @'
+          import json
+          import sys
+          from pathlib import Path
+          import numpy as np
+
+          for package in ("libblas", "libcblas", "liblapack"):
+              records = list((Path(sys.prefix) / "conda-meta").glob(f"{package}-*.json"))
+              assert len(records) == 1, (package, records)
+              assert "openblas" in json.loads(records[0].read_text())["build"], package
+          np.testing.assert_array_equal(np.dot(np.ones((30000, 3)), np.ones(3)), np.full(30000, 3.0))
+          '@
+          & $python -c $numericSmoke
+          if ($LASTEXITCODE -ne 0) {
+            throw "The installed OpenBLAS numerical stack failed."
+          }
+
           & $cli --version
           if ($LASTEXITCODE -ne 0) {
             throw "The automation CLI wrapper could not start TopoPPI."
@@ -169,8 +199,10 @@ jobs:
 
           $env:MPLBACKEND = "Agg"
           $env:PYTHONUTF8 = "1"
-          $smokeOutput = Join-Path $env:RUNNER_TEMP "topoppi-windows-smoke.png"
-          $smokeAtlas = Join-Path $env:RUNNER_TEMP "topoppi-windows-smoke.npz"
+          $userResults = Join-Path $installDir "results"
+          New-Item -ItemType Directory -Force -Path $userResults | Out-Null
+          $smokeOutput = Join-Path $userResults "interface.png"
+          $smokeAtlas = Join-Path $userResults "interface.npz"
           & $cli tests\fixtures\tiny_complex.pdb -A A -B B `
             --prolif tests\fixtures\prolif_interactions.json `
             --min-points 1 `
@@ -179,7 +211,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or !(Test-Path $smokeOutput)) {
             throw "The installed TopoPPI pipeline smoke failed."
           }
-          & $cli render $smokeAtlas -o (Join-Path $env:RUNNER_TEMP "topoppi-windows-reopened.pdf")
+          & $cli render $smokeAtlas -o (Join-Path $userResults "interface.pdf")
           if ($LASTEXITCODE -ne 0) {
             throw "The installed CLI could not render its saved footprint atlas."
           }
@@ -187,6 +219,54 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "The installed GUI footprint editing smoke failed."
           }
+
+          $wheelDir = Join-Path $env:RUNNER_TEMP "binding-wheels"
+          $wheels = @("affinity", "hotspot") | ForEach-Object {
+            Join-Path $wheelDir "topoppi_${_}-${{ steps.version.outputs.value }}-py3-none-any.whl"
+          }
+          & $python -m pip install @wheels
+          if ($LASTEXITCODE -ne 0) { throw "Plugin installation into the desktop environment failed." }
+          & $python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw "Desktop plugin dependencies are inconsistent." }
+          $env:TOPOPPI_OPTCUTS_BIN = Join-Path $installDir "bin\OptCuts_bin.exe"
+          Copy-Item installer\smoke_affinity.py, installer\smoke_binding.py $env:RUNNER_TEMP
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $python smoke_binding.py --require-gui
+            if ($LASTEXITCODE -ne 0) { throw "Installed desktop binding workflows failed." }
+          }
+          finally { Pop-Location }
+
+          $atlasBeforeRepair = [System.IO.File]::ReadAllBytes($smokeAtlas)
+          $repairLog = Join-Path $env:RUNNER_TEMP "TopoPPI Repair Installer.log"
+          $repairProcess = Start-Process -FilePath $installer -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$installDir`"", "/LOG=`"$repairLog`""
+          ) -PassThru
+          $repairProcess | Wait-Process -Timeout 1800 -ErrorAction Stop
+          if ($repairProcess.ExitCode -ne 0) {
+            Get-Content $repairLog -Tail 200 -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $installDir "installation.log") -Tail 200 -ErrorAction SilentlyContinue
+            throw "TopoPPI repair failed with exit code $($repairProcess.ExitCode)."
+          }
+          if ((@(& subst.exe) -join "`n") -ne ($mappedDrivesBefore -join "`n")) {
+            throw "Windows repair left a package-cache drive mapped."
+          }
+          $atlasAfterRepair = [System.IO.File]::ReadAllBytes($smokeAtlas)
+          if (![System.Linq.Enumerable]::SequenceEqual[byte]($atlasBeforeRepair, $atlasAfterRepair)) {
+            throw "Repair changed the user's saved atlas."
+          }
+          & $python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw "Repair left inconsistent plugin dependencies." }
+          & $python -c $numericSmoke
+          if ($LASTEXITCODE -ne 0) { throw "Repair changed the working numerical stack." }
+          & $cli render $smokeAtlas -o (Join-Path $userResults "after-repair.pdf")
+          if ($LASTEXITCODE -ne 0) { throw "The saved atlas could not reopen after repair." }
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $python smoke_binding.py --require-gui
+            if ($LASTEXITCODE -ne 0) { throw "Binding workflows failed after desktop repair." }
+          }
+          finally { Pop-Location }
 
           $uninstaller = Join-Path $installDir "unins000.exe"
           if (!(Test-Path $uninstaller)) {
@@ -199,9 +279,16 @@ jobs:
           if ($uninstallProcess.ExitCode -ne 0) {
             throw "TopoPPI uninstall failed with exit code $($uninstallProcess.ExitCode)."
           }
-          if (Test-Path $installDir) {
-            $remaining = @(Get-ChildItem -Force $installDir | ForEach-Object Name)
-            throw "TopoPPI install directory remained after uninstall: $($remaining -join ', ')"
+          if (!(Test-Path $smokeAtlas) -or !(Test-Path (Join-Path $userResults "after-repair.pdf"))) {
+            throw "Uninstall removed saved analysis output."
+          }
+          $atlasAfterUninstall = [System.IO.File]::ReadAllBytes($smokeAtlas)
+          if (![System.Linq.Enumerable]::SequenceEqual[byte]($atlasBeforeRepair, $atlasAfterUninstall)) {
+            throw "Uninstall changed the user's saved atlas."
+          }
+          $remaining = @(Get-ChildItem -Force $installDir | Where-Object Name -ne "results" | ForEach-Object Name)
+          if ($remaining.Count -ne 0) {
+            throw "Application files remained after uninstall: $($remaining -join ', ')"
           }
           if (Test-Path $commandPromptShortcut) {
             throw "The TopoPPI command prompt shortcut remained after uninstall."
@@ -213,7 +300,7 @@ jobs:
         with:
           name: windows-installation-logs
           path: |
-            ${{ runner.temp }}/TopoPPI Installer.log
+            ${{ runner.temp }}/TopoPPI* Installer.log
             ${{ runner.temp }}/TopoPPI */installation.log
           if-no-files-found: ignore
           retention-days: 14
