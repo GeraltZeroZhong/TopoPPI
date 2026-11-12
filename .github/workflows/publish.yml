@@ -28,7 +28,7 @@ jobs:
           plugin_version="$(PYTHONPATH=plugins/affinity python -c 'from topoppi_affinity import __version__; print(__version__)')"
           hotspot_version="$(PYTHONPATH=plugins/hotspot python -c 'from topoppi_hotspot import __version__; print(__version__)')"
           if [[ "$plugin_version" != "$version" || "$hotspot_version" != "$version" ]]; then
-            echo "Core and affinity plugin versions differ: $version / $plugin_version" >&2
+            echo "Package versions differ: Core $version / Affinity $plugin_version / Hotspot $hotspot_version" >&2
             exit 1
           fi
           if [[ "$version" =~ (a|b|rc|\.dev)[0-9]*$ ]]; then
