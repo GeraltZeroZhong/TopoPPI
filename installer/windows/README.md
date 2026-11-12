@@ -15,6 +15,9 @@ remain available. Select the matching release when reproducing that version.
 The setup program creates a dedicated Python 3.10 environment under
 `%LOCALAPPDATA%\TopoPPI`, installs TopoPPI and its scientific dependencies,
 copies the matching OptCuts executable, and creates Start Menu shortcuts.
+The scientific environment uses conda-forge packages and OpenBLAS for numerical
+operations. Setup checks the numerical runtime and records command output in
+`installation.log`.
 
 ## Install
 
@@ -129,4 +132,10 @@ The setup executable is written to `installer/windows/Output/`.
 
 The setup executable includes `OptCuts_bin-windows-x86_64.exe`. A local build that omits it downloads the matching GitHub release asset and checks its supplied SHA-256 sidecar during setup.
 
-The `Windows Installer` workflow builds the native executable and installer, then exercises the installed command prompt, mapping, atlas editing, export and removal. Tagged installers use that tag’s source archive. The installer and native executable are published together after the package and platform jobs succeed.
+The `Windows Installer` workflow builds the native executable and installer, then
+exercises the installed command prompt, mapping, atlas editing and export. It
+installs matching plugin wheels into the same environment to test affinity,
+mutation effects and hotspot ranking, and checks repeat installation and removal
+with saved analysis files. Tagged installers use that tag’s source archive. The
+installer and native executable are published together after the package and
+platform jobs succeed.

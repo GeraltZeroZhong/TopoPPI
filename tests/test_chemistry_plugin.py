@@ -8,6 +8,7 @@ import sys
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -95,6 +96,35 @@ def test_prolif_rejects_ambiguous_grouped_chain_schema():
     interface.partners[0].chains = ("A", "C")
     with pytest.raises(ValueError, match="one author chain per partner"):
         detect(interface)
+
+
+@pytest.mark.parametrize("conversion_fails", [False, True])
+def test_prolif_closes_structure_reader_before_temporary_cleanup(monkeypatch, conversion_fails):
+    import MDAnalysis as mda
+
+    from topoppi_chemistry.backends import prolif
+
+    universe_factory = mda.Universe
+    readers = []
+
+    def tracked_universe(*args, **kwargs):
+        universe = universe_factory(*args, **kwargs)
+        reader = universe.trajectory
+        monkeypatch.setattr(reader, "close", Mock(wraps=reader.close))
+        readers.append(reader)
+        return universe
+
+    monkeypatch.setattr(mda, "Universe", tracked_universe)
+    interface = get_interface(load_structure(FIXTURE), "A", "B")
+    if conversion_fails:
+        monkeypatch.setattr(prolif, "_mda_to_prolif_with_explicit_hydrogen",
+                            Mock(side_effect=ValueError("chemical conversion failed")))
+        with pytest.raises(ValueError, match="chemical conversion failed"):
+            prolif.detect(interface)
+    else:
+        assert prolif.detect(interface).interactions == EXPECTED_RECORDS
+    assert len(readers) == 1
+    readers[0].close.assert_called_once_with()
 
 
 @pytest.mark.parametrize("format", ["pdb", "cif"])

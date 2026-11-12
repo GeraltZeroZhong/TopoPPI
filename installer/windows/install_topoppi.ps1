@@ -23,9 +23,19 @@ function Invoke-External {
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$FilePath failed with exit code $LASTEXITCODE"
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell treats native stderr as ErrorRecord objects. Keep
+        # both streams visible in the transcript and judge the native exit code.
+        $ErrorActionPreference = "Continue"
+        & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $ExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    if ($ExitCode -ne 0) {
+        throw "$FilePath failed with exit code $ExitCode"
     }
 }
 
@@ -46,7 +56,9 @@ try {
 
     if (!(Test-Path $Micromamba)) {
         Write-Step "Downloading micromamba"
-        Invoke-WebRequest -Uri $MicromambaUrl -OutFile $Micromamba
+        $DownloadPath = "$Micromamba.download"
+        Invoke-WebRequest -Uri $MicromambaUrl -OutFile $DownloadPath
+        Move-Item -Force $DownloadPath $Micromamba
     }
 
     # Micromamba's index reader and archive extractor need an ASCII cache path.
@@ -74,6 +86,9 @@ try {
         "tk",
         "igl=2.6.*",
         "numpy>=1.21",
+        "libblas=*=*openblas",
+        "libcblas=*=*openblas",
+        "liblapack=*=*openblas",
         "scipy",
         "biopython",
         "scikit-image",
@@ -93,11 +108,11 @@ try {
 
     if (Test-Path $EnvDir) {
         Write-Step "Updating TopoPPI Conda environment"
-        Invoke-External $Micromamba (@("install", "-y", "-p", $EnvDir, "-c", "conda-forge") + $Packages)
+        Invoke-External $Micromamba (@("install", "-y", "-p", $EnvDir, "--override-channels", "-c", "conda-forge") + $Packages)
     }
     else {
         Write-Step "Creating TopoPPI Conda environment"
-        Invoke-External $Micromamba (@("create", "-y", "-p", $EnvDir, "-c", "conda-forge") + $Packages)
+        Invoke-External $Micromamba (@("create", "-y", "-p", $EnvDir, "--override-channels", "-c", "conda-forge") + $Packages)
     }
 
     $Python = Join-Path $EnvDir "python.exe"
@@ -113,7 +128,6 @@ try {
     }
 
     Write-Step "Installing TopoPPI from $ResolvedPackageSpec"
-    Invoke-External $Python @("-m", "pip", "install", "--upgrade", "--force-reinstall", "pip")
     Invoke-External $Python @("-m", "pip", "install", "prolif>=2.0")
     Invoke-External $Python @("-m", "pip", "install", "--no-deps", "--force-reinstall", $ResolvedPackageSpec)
 
@@ -121,6 +135,12 @@ try {
     Invoke-External $Python @(
         "-c",
         "import MDAnalysis, prolif, rdkit, topoppi; assert 'chemistry.detect' in topoppi.plugins.info('chemistry').capabilities; print('ProLIF interaction stack ready')"
+    )
+
+    Write-Step "Verifying numerical runtime"
+    Invoke-External $Python @(
+        "-c",
+        "import numpy as np; np.testing.assert_allclose(np.ones((30000, 3)) @ np.ones(3), 3.0); print('Numerical runtime ready')"
     )
 
     Write-Step "Installing Windows OptCuts artifact"

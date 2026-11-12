@@ -5,7 +5,7 @@ import logging
 import re
 import warnings
 from collections import defaultdict
-from contextlib import contextmanager, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -306,28 +306,29 @@ def detect(interface, *, context=None):
     context.emit("chemistry.preparing", backend="prolif")
     with _prolif_structure_input(interface) as (mda_path, mda_chain_a, mda_chain_b):
         universe = mda.Universe(mda_path)
-        chain_a_atoms = _select_chain_atoms(universe, mda_chain_a)
-        chain_b_atoms = _select_chain_atoms(universe, mda_chain_b)
-        if chain_a_atoms is None or chain_b_atoms is None:
-            raise ValueError(
-                f"ProLIF atom selection failed for chain {str(chain_a).strip()!r} or {str(chain_b).strip()!r}."
+        with closing(universe.trajectory):
+            chain_a_atoms = _select_chain_atoms(universe, mda_chain_a)
+            chain_b_atoms = _select_chain_atoms(universe, mda_chain_b)
+            if chain_a_atoms is None or chain_b_atoms is None:
+                raise ValueError(
+                    f"ProLIF atom selection failed for chain {str(chain_a).strip()!r} or {str(chain_b).strip()!r}."
+                )
+            offset_a = max(0, -min(int(residue.resid) for residue in chain_a_atoms.residues))
+            offset_b = max(0, -min(int(residue.resid) for residue in chain_b_atoms.residues))
+            mol_a = _mda_to_prolif_with_explicit_hydrogen(
+                chain_a_atoms, chain_a, plf, log, residue_number_offset=offset_a)
+            mol_b = _mda_to_prolif_with_explicit_hydrogen(
+                chain_b_atoms, chain_b, plf, log, residue_number_offset=offset_b)
+            context.check_cancelled()
+            context.emit("chemistry.detecting", backend="prolif")
+            fp = plf.Fingerprint()
+            fp.run_from_iterable([mol_b], mol_a, progress=False, n_jobs=1)
+            records = _to_records(
+                fp.to_dataframe(),
+                residue_tokens_a=_chain_residue_token_map(chain_a_atoms, offset_a),
+                residue_tokens_b=_chain_residue_token_map(chain_b_atoms, offset_b),
+                log=log,
             )
-        offset_a = max(0, -min(int(residue.resid) for residue in chain_a_atoms.residues))
-        offset_b = max(0, -min(int(residue.resid) for residue in chain_b_atoms.residues))
-        mol_a = _mda_to_prolif_with_explicit_hydrogen(
-            chain_a_atoms, chain_a, plf, log, residue_number_offset=offset_a)
-        mol_b = _mda_to_prolif_with_explicit_hydrogen(
-            chain_b_atoms, chain_b, plf, log, residue_number_offset=offset_b)
-        context.check_cancelled()
-        context.emit("chemistry.detecting", backend="prolif")
-        fp = plf.Fingerprint()
-        fp.run_from_iterable([mol_b], mol_a, progress=False, n_jobs=1)
-        records = _to_records(
-            fp.to_dataframe(),
-            residue_tokens_a=_chain_residue_token_map(chain_a_atoms, offset_a),
-            residue_tokens_b=_chain_residue_token_map(chain_b_atoms, offset_b),
-            log=log,
-        )
     context.check_cancelled()
     return InteractionResult("prolif", chain_a, chain_b, records,
                              {"analysis_id": interface.analysis_id, "source": dict(interface.source)})

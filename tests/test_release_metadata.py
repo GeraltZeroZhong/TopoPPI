@@ -48,7 +48,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("import MDAnalysis, prolif, rdkit", bootstrap)
         self.assertIn("Verifying ProLIF interaction stack", bootstrap)
         self.assertIn("micromamba-releases/releases/latest/download/micromamba-win-64", bootstrap)
-        self.assertIn("Invoke-WebRequest -Uri $MicromambaUrl -OutFile $Micromamba", bootstrap)
+        self.assertIn("Invoke-WebRequest -Uri $MicromambaUrl -OutFile $DownloadPath", bootstrap)
         self.assertNotIn("tar.exe", bootstrap)
         self.assertIn('Remove-Item (Join-Path $InstallDir "TopoPPI GUI.cmd")', bootstrap)
 
@@ -156,7 +156,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("& $cli --version", windows)
         self.assertIn("Start-Process -FilePath $installer", windows)
         self.assertIn("Start-Process -FilePath $uninstaller", windows)
-        self.assertEqual(windows.count("| Wait-Process -Timeout"), 1)
+        self.assertEqual(windows.count("| Wait-Process -Timeout"), 2)
         self.assertEqual(windows.count(") -Wait -PassThru"), 1)
         self.assertIn("timeout-minutes: 40", windows)
         self.assertIn('"/DIR=`"$installDir`""', windows)

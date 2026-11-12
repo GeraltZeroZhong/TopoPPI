@@ -27,8 +27,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plugin", action="store_true")
     parser.add_argument("--without-chemistry-deps", action="store_true")
+    parser.add_argument("--allow-scikit-learn", action="store_true",
+                        help="Allow scikit-learn supplied by the desktop Conda environment")
     args = parser.parse_args()
     absent = ("sklearn", "torch", "topoppi_affinity", "topoppi_hotspot")
+    if args.allow_scikit_learn:
+        absent = tuple(name for name in absent if name != "sklearn")
     if args.without_chemistry_deps:
         absent += ("pandas", "prolif", "MDAnalysis", "rdkit")
     for name in absent:
