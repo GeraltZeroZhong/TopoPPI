@@ -79,8 +79,9 @@ If setup stops:
 1. Read the final PowerShell message or `installation.log` in the installation
    folder for the failed download or package step.
 2. Restore the network connection and run the installer again.
-3. If the environment remains incomplete, uninstall TopoPPI, remove
-   `%LOCALAPPDATA%\TopoPPI`, and start a fresh installation.
+3. If the environment remains incomplete, move any analysis files saved inside
+   `%LOCALAPPDATA%\TopoPPI` to another folder. Uninstall TopoPPI, remove the
+   remaining installation folder, and start a fresh installation.
 
 Setup reports the PowerShell exit code when an installation step needs attention.
 

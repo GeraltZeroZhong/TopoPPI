@@ -2,6 +2,10 @@
 
 ## [3.0.0] - 2026-11-09
 
+- Standardized the Windows numerical runtime on OpenBLAS, retained native command errors in installation logs, and made interrupted micromamba downloads recoverable on retry.
+- Closed ProLIF structure readers before temporary-file cleanup on Windows.
+- Extended desktop installation checks to cover binding predictions, repair with plugins installed, and preservation of saved results during repair and removal.
+
 - Added the public representation API for native meshes, UV carriers, direct physical tables, and named physicochemical descriptors, with optional analysis scripts.
 - Added `topoppi representation descriptors` to export 477 named descriptors and optional residue and contact tables from PDB or mmCIF input.
 - Included one CPU inference model for each of binding affinity, mutation effects and hotspot ranking, with model cards and saved-result workflows.
