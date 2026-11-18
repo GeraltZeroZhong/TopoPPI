@@ -5,12 +5,18 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: "Resume a draft release from its original tag run ID (leave empty for a build only)"
+        type: string
+        required: false
 
 permissions:
   contents: read
 
 jobs:
   metadata:
+    if: ${{ !inputs.resume_run_id }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -204,36 +210,104 @@ jobs:
           mapfile -t assets < <(find release-assets -maxdepth 1 -type f -print | sort)
           gh release upload "$TAG" --clobber "${assets[@]}"
 
-  pypi:
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs:
-      - metadata
-      - assemble
-      - draft_release
+  release_source:
+    needs: draft_release
+    if: >-
+      ${{ !cancelled() && (needs.draft_release.result == 'success' ||
+          (github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' &&
+           github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) }}
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
+      actions: read
+      contents: write  # GitHub exposes draft releases to accounts with push access.
+    outputs:
+      run_id: ${{ steps.source.outputs.run_id }}
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Identify the release bundle
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.resume_run_id || github.run_id }}
+          RESUME: ${{ inputs.resume_run_id != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [[ "$RESUME" == true ]]; then
+            [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+            run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+            jq -e --arg repo "$GITHUB_REPOSITORY" '
+              .event == "push" and .path == ".github/workflows/publish.yml" and
+              .head_repository.full_name == $repo' <<<"$run" >/dev/null
+            tag="$(jq -r .head_branch <<<"$run")"
+            [[ "$tag" =~ ^v[0-9][0-9A-Za-z.]*$ ]]
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$tag" --jq .sha)"
+            [[ "$sha" == "$(jq -r .head_sha <<<"$run")" ]]
+            draft="$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json isDraft,apiUrl)"
+            jq -e .isDraft <<<"$draft" >/dev/null
+            gh api "$(jq -r .apiUrl <<<"$draft")" --jq '.assets[] | [.digest, .name] | @tsv' > draft-assets.tsv
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the original bundle for comparison with the draft
+        if: inputs.resume_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.source.outputs.run_id }}
+          name: release-bundle
+          path: release-assets
+
+      - name: Match the draft attachments to the original build
+        if: inputs.resume_run_id != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum -- * | sort > ../bundle.sha256
+          awk -F '\t' '{sub(/^sha256:/, "", $1); print $1 "  " $2}' ../draft-assets.tsv | sort > ../draft.sha256
+          diff -u ../bundle.sha256 ../draft.sha256
+
+  pypi:
+    needs: release_source
+    if: ${{ !cancelled() && needs.release_source.result == 'success' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: pypi
+            packages: topoppi topoppi_affinity
+          - environment: pypi-hotspot
+            packages: topoppi_hotspot
+    environment: ${{ matrix.environment }}
+    permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
       - uses: actions/download-artifact@v8
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.release_source.outputs.run_id }}
           name: release-bundle
           path: release-assets
 
       - name: Select Python distributions
         env:
-          VERSION: ${{ needs.metadata.outputs.version }}
+          VERSION: ${{ needs.release_source.outputs.version }}
+          PACKAGES: ${{ matrix.packages }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir pypi-dist
-          install -m 644 "release-assets/topoppi-${VERSION}-py3-none-any.whl" pypi-dist/
-          install -m 644 "release-assets/topoppi-${VERSION}.tar.gz" pypi-dist/
-          install -m 644 "release-assets/topoppi_affinity-${VERSION}-py3-none-any.whl" pypi-dist/
-          install -m 644 "release-assets/topoppi_affinity-${VERSION}.tar.gz" pypi-dist/
-          install -m 644 "release-assets/topoppi_hotspot-${VERSION}-py3-none-any.whl" pypi-dist/
-          install -m 644 "release-assets/topoppi_hotspot-${VERSION}.tar.gz" pypi-dist/
+          for package in $PACKAGES; do
+            install -m 644 "release-assets/${package}-${VERSION}-py3-none-any.whl" "release-assets/${package}-${VERSION}.tar.gz" pypi-dist/
+          done
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.14.2
@@ -242,11 +316,11 @@ jobs:
           skip-existing: true
 
   verify_pypi:
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs:
-      - metadata
-      - assemble
-      - pypi
+    needs: [release_source, pypi]
+    if: ${{ !cancelled() && needs.release_source.result == 'success' && needs.pypi.result == 'success' }}
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-python@v7
@@ -254,12 +328,14 @@ jobs:
           python-version: "3.10"
       - uses: actions/download-artifact@v8
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.release_source.outputs.run_id }}
           name: release-bundle
           path: release-assets
 
       - name: Match PyPI files to the assembled bundle
         env:
-          VERSION: ${{ needs.metadata.outputs.version }}
+          VERSION: ${{ needs.release_source.outputs.version }}
         shell: bash
         run: |
           python - <<'PY'
@@ -296,7 +372,7 @@ jobs:
           PY
       - name: Verify Core and all three prediction tasks from PyPI
         env:
-          VERSION: ${{ needs.metadata.outputs.version }}
+          VERSION: ${{ needs.release_source.outputs.version }}
           HF_HUB_OFFLINE: "1"
         shell: bash
         run: |
@@ -340,18 +416,15 @@ jobs:
           "$RUNNER_TEMP/pypi-install/bin/python" smoke_binding.py --no-gui
 
   publish_release:
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs:
-      - metadata
-      - draft_release
-      - verify_pypi
+    needs: [release_source, verify_pypi]
+    if: ${{ !cancelled() && needs.release_source.result == 'success' && needs.verify_pypi.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ needs.release_source.outputs.tag }}
     steps:
       - name: Publish the verified GitHub release
         shell: bash
