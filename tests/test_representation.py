@@ -111,6 +111,38 @@ def test_native_codec_retains_mass_row_identity():
     assert decoded.faces.shape == (4, 3)
 
 
+def test_native_cache_reuses_one_source_and_refreshes_for_another(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from topoppi_representation.codecs import native
+
+    # Exercise the geometry cache independently of the optional wire compressors.
+    encoded_xyz = []
+    monkeypatch.setitem(sys.modules, "DracoPy", SimpleNamespace(
+        encode=lambda xyz, *args, **kwargs: encoded_xyz.append(xyz.copy()) or b"mesh"))
+    monkeypatch.setattr(native, "pack", lambda *args: b"code")
+    original_coarse = native.coarse_patch
+    calls = []
+
+    def coarse(*args):
+        calls.append(args[0])
+        return original_coarse(*args)
+
+    monkeypatch.setattr(native, "coarse_patch", coarse)
+    first, cache = source(), {}
+    native.encode_native(first, geometry_cache=cache)
+    native.encode_native(first, quantization_bits=12, geometry_cache=cache)
+    assert len(calls) == len(first.patches)
+    second = copy.deepcopy(first)
+    for patch in second.patches:
+        patch.xyz += [20.0, -5.0, 3.0]
+    native.encode_native(second, geometry_cache=cache)
+    assert len(calls) == len(first.patches) + len(second.patches)
+    for expected, actual in zip(second.patches, encoded_xyz[-len(second.patches):], strict=True):
+        np.testing.assert_array_equal(actual, expected.xyz)
+
+
 def test_physical_dictionary_and_sasa_recovery_preserve_schema(monkeypatch):
     pytest.importorskip("pandas")
     import topoppi

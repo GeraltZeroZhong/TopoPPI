@@ -1,10 +1,16 @@
 # TopoPPI Affinity
 
-TopoPPI Affinity adds affinity modelling and linked interface review to [TopoPPI](../../README.md). It extracts native interface descriptors and includes CPU models for binding affinity (pKd) and mutation effects (ΔΔG). Users can fit regression models to supplied data or load custom models, then review saved predictions alongside the corresponding residues and contacts.
+TopoPPI Affinity adds affinity modelling and linked interface review to [TopoPPI](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/README.md). It extracts native interface descriptors and includes CPU models for binding affinity (pKd) and mutation effects (ΔΔG). Users can fit regression models to supplied data or load custom models, then review saved predictions alongside the corresponding residues and contacts.
 
 ## Installation
 
-Use Python 3.10 and install the core and plugin from the repository root:
+Install TopoPPI Affinity from PyPI with Python 3.10.
+
+```sh
+python -m pip install topoppi-affinity
+```
+
+For development, install Core, the plugin and its test dependencies from the repository root.
 
 ```sh
 python -m pip install -e . -e './plugins/affinity[dev]'
@@ -86,7 +92,7 @@ topoppi-affinity gui affinity-demo/results
 The plugin contains one default model per task, including fitted preprocessing
 and feature definitions. For mutation effects, use `--task mutation` and provide
 `--mutations` or `--variants`. Default prediction runs on CPU without model
-downloads. See [models](docs/models.md) and the [workflow](docs/workflow.md).
+downloads. See [models](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/docs/models.md) and the [workflow](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/docs/workflow.md).
 
 ## Inputs and outputs
 
@@ -94,8 +100,8 @@ Supply PDB or mmCIF structures and complete partner chain groups. Mutation input
 
 Saved analyses contain a JSON report, prediction tables, the native interface and any requested layout results. Prediction rows retain their identifiers, status and error messages. The report records model scope and separate prediction/layout status. Models determine their feature requirements and applicability; review their training metadata before interpreting predictions.
 
-Run `topoppi-affinity --help` for CLI commands. See the [workflow guide](docs/workflow.md), [model interfaces](docs/models.md), [evaluation primitives](docs/evaluation.md), [feature tools](tools/README.md) and [test instructions](tests/README.md).
+Run `topoppi-affinity --help` for CLI commands. See the [workflow guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/docs/workflow.md), [model interfaces](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/docs/models.md), [evaluation primitives](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/docs/evaluation.md), [feature tools](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/tools/README.md) and [test instructions](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/tests/README.md).
 
 ## Contributing
 
-Use independently constructed fixtures for unit tests, preserve target units and row identities, and add coverage for changed public behavior. Run the affinity test suite together with affected core tests. Public interfaces are listed in the [API guide](docs/api.md).
+Use independently constructed fixtures for unit tests, preserve target units and row identities, and add coverage for changed public behavior. Run the affinity test suite together with affected core tests. Public interfaces are listed in the [API guide](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/affinity/docs/api.md).

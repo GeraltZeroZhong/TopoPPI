@@ -74,4 +74,21 @@ def write_csv_atomic(
     os.replace(temporary, target)
 
 
-__all__ = ["git_worktree_state", "read_csv_rows", "sha256_file", "write_csv_atomic"]
+def write_npz_atomic(path: str | PathLike[str], arrays: Mapping[str, object]) -> None:
+    """Replace a compressed NPZ only after the complete archive has been written."""
+    import numpy as np
+
+    target = Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=target.parent, prefix=f".{target.name}.",
+                                         suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            np.savez_compressed(handle, **arrays)
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+__all__ = ["git_worktree_state", "read_csv_rows", "sha256_file", "write_csv_atomic", "write_npz_atomic"]

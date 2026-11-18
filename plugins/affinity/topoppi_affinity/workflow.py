@@ -589,8 +589,9 @@ def load_analysis(path):
     if path.is_dir():
         path /= "analysis.json"
     report = json.loads(path.read_text())
-    if report.get("format") != "topoppi-affinity-analysis" or report.get("version") != 1:
-        raise ValueError("Unsupported TopoPPI Affinity analysis")
+    if (not isinstance(report, dict) or report.get("format") != "topoppi-affinity-analysis"
+            or report.get("version") != 1):
+        raise ValueError("Choose analysis.json from a TopoPPI Affinity results folder.")
     if report.get("model"):
         report["model"] = public_model_info(report["model"])
     native = report["files"].get("interface")

@@ -100,6 +100,24 @@ def test_standalone_full_context_partner_swap_configs_and_candidate_flags(tmp_pa
     assert len(mocked_structure.calls) == 2
 
 
+
+def test_custom_model_reports_a_partner_without_rankable_residues(tmp_path, mocked_structure, capsys):
+    # An alanine-only partner contributes context but has no Ala-scan candidates.
+    left = mocked_structure.features.side.eq(0)
+    mocked_structure.features.loc[left, "wt"] = "A"
+    mocked_structure.features.loc[left, "residue_key"] = ["A:ALA:1", "A:ALA:2", "A:ALA:3"]
+    model = _linear_bundle(tmp_path / "model", ["surface.area"])
+    output = tmp_path / "output"
+    result = cli.main(["rank-complex", "--structure", "toy.pdb", "--chains-a", "A", "--chains-b", "B,C",
+                       "--partner", "A", "--model-dir", str(model), "--output", str(output), "--json"])
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no standard non-alanine residues" in captured.err
+    assert not (output / "rankings.csv").exists()
+    assert not (output / "metadata.json").exists()
+
+
 def test_only_required_auxiliary_block_is_computed_with_reused_preparation(tmp_path, mocked_structure, monkeypatch):
     from topoppi_hotspot import (
         footprint_diffusion,

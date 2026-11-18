@@ -12,7 +12,7 @@ physical inputs from the supplied structure.
 | Model | Target | Inputs | Training source |
 | --- | --- | --- | --- |
 | Absolute affinity | pKd = −log10(Kd/M) | 477 exposure, burial, chemical-composition and atomic-contact descriptors | PDBbind 2020 release 1 exact dissociation constants with BIORAD curation |
-| Mutation effect | ΔΔG in kcal/mol; positive weakens binding | 263 native-interface and substitution descriptors; 167 WT SASA descriptors; temperature/(298.15 K) | SKEMPI 2.0 paired dissociation constants at reported temperatures |
+| Mutation effect | ΔΔG in kcal/mol; positive weakens binding | 263 native-interface and substitution descriptors; 167 wild-type SASA descriptors; temperature/(298.15 K) | SKEMPI 2.0 paired dissociation constants at reported temperatures |
 
 Model selection compares six candidates: linear ridge regression with
 regularization parameter α ∈ {0.1, 10, 1000} and RBF kernel ridge regression with

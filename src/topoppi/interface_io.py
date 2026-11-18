@@ -8,6 +8,7 @@ import numpy as np
 import trimesh
 
 from topoppi.config import SurfaceConfig, TopologyConfig
+from topoppi.file_utils import write_npz_atomic
 from topoppi.interface import PartnerInterface, PreparedInterface
 from topoppi.io.atom_records import atom_records, restore_atoms
 
@@ -43,8 +44,7 @@ def save_interface(prepared: PreparedInterface, path: str | Path) -> Path:
     arrays["document_json"] = np.asarray(json.dumps(record, default=_json))
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as handle:
-        np.savez_compressed(handle, **arrays)
+    write_npz_atomic(path, arrays)
     return path
 
 

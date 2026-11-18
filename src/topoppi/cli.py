@@ -504,6 +504,9 @@ def _platform_dispatch(argv):
                 raise ValueError(f"Unknown command '{command}'. Did you mean 'topoppi {suggestions[0]}'? "
                                  "Use 'topoppi --help' to list commands.")
             registry.info(command)  # A missing plugin gets the actionable boundary error.
+    except KeyboardInterrupt:
+        print("Operation cancelled.", file=sys.stderr)
+        return 130
     except ExecutionCancelled as exc:
         print(str(exc), file=sys.stderr)
         return 130
@@ -594,6 +597,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     try:
         run_interface_mapping(config, log=log)
+    except KeyboardInterrupt:
+        print("Mapping cancelled.", file=sys.stderr)
+        return 130
     except TopoPPIError as exc:
         log.error("%s", exc)
         return 1

@@ -78,15 +78,23 @@ def _load_bundle(model_dir, inherited_protocol=None):
         raise ValueError(f"Unsupported frozen model kind: {kind}")
     if kind != "fusion" and "columns" not in metadata:
         raise ValueError(f"Model metadata in {directory / 'model.json'} must declare its feature columns.")
+    if kind != "fusion" and (not isinstance(metadata["columns"], list)
+                              or any(not isinstance(column, str) for column in metadata["columns"])):
+        raise ValueError("Model feature columns must be a JSON list of feature names.")
     components = []
     if kind == "fusion":
-        for component in metadata["components"]:
+        definitions = metadata.get("components")
+        if not isinstance(definitions, list) or not definitions:
+            raise ValueError("A fusion model must declare a nonempty components list in model.json.")
+        for component in definitions:
+            if (not isinstance(component, dict)
+                    or any(not isinstance(component.get(key), str) or not component[key]
+                           for key in ("name", "path"))):
+                raise ValueError("Each fusion component must declare a name and model path.")
             child = _load_bundle(directory / component["path"], protocol)
             if child.feature_protocol != protocol:
                 raise ValueError("Fusion components require different structure feature protocols.")
             components.append((component["name"], child))
-        if not components:
-            raise ValueError("A frozen fusion must contain at least one component.")
     return _ModelBundle(directory, metadata, protocol, components)
 
 
@@ -249,8 +257,8 @@ def _prepare_features(structure, groups, complex_id, prepared, requirements):
 def _registry_embeddings(registry, frame, all_features):
     """Match full observed WT chains before reusing a supplied embedding registry."""
     registry = Path(registry)
-    chains = pd.read_csv(registry / "chain_sequences.csv", keep_default_na=False)
-    sequences = pd.read_csv(registry / "sequences.csv", keep_default_na=False).set_index("sequence_id").sequence
+    chains = pd.read_csv(registry / "chain_sequences.csv", keep_default_na=False, dtype=str)
+    sequences = pd.read_csv(registry / "sequences.csv", keep_default_na=False, dtype=str).set_index("sequence_id").sequence
     observed = {}
     for chain, part in all_features.loc[all_features.ca_resolved].groupby("chain", sort=False):
         observed[str(chain)] = (part.residue_key.tolist(), "".join(part.wt))
@@ -361,6 +369,11 @@ def _rank_prepared(prepared, structure, groups, selected, model_dir, output_dir,
                                      optcuts_bin=optcuts_bin, context=context)
     protocol = requirements["feature_protocol"]
     all_features, frame, graphs, reports = _prepare_features(structure, groups, complex_id, prepared, requirements)
+    eligible = standard_nonalanine_candidates(frame)
+    side = groups.index(selected)
+    positions = np.flatnonzero((frame.side.to_numpy() == side) & eligible)
+    if not len(positions):
+        raise ValueError("The selected partner has no standard non-alanine residues within the 6 A interface.")
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     embeddings, embedding_report = None, None
@@ -375,9 +388,6 @@ def _rank_prepared(prepared, structure, groups, selected, model_dir, output_dir,
     if context is not None:
         context.check_cancelled()
     scores, components = score_model(model_dir, frame, graphs, embeddings)
-    eligible = standard_nonalanine_candidates(frame)
-    side = groups.index(selected)
-    positions = np.flatnonzero((frame.side.to_numpy() == side) & eligible)
     if not np.isfinite(np.asarray(scores)[positions]).all():
         raise ValueError("Frozen model produced nonfinite candidate ranking scores.")
     result = frame.iloc[positions][KEYS + ["chain", "residue_number", "insertion_code", "side", "wt"]].copy()
