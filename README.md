@@ -4,12 +4,12 @@
 
 <h1 align="center">TopoPPI</h1>
 
-[![PyPI](https://img.shields.io/pypi/v/topoppi?label=PyPI&color=3776ab)](https://pypi.org/project/topoppi/)
+[![PyPI 3.0.0](https://img.shields.io/badge/PyPI-3.0.0-3776ab)](https://pypi.org/project/topoppi/3.0.0/)
 [![Windows](https://img.shields.io/badge/Windows-x64-0078d4)](#windows)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-555555)](#macos)
 [![Paper](https://img.shields.io/badge/Paper-PLOS%20Computational%20Biology-8b5cf6)](https://doi.org/10.1371/journal.pcbi.1014963)
 [![Paper version](https://img.shields.io/badge/Paper%20version-v2.1-d65a91)](https://github.com/GeraltZeroZhong/TopoPPI/tree/v2.1)
-[![Latest release](https://img.shields.io/github/v/release/GeraltZeroZhong/TopoPPI?label=Latest%20release&color=2563eb)](https://github.com/GeraltZeroZhong/TopoPPI/releases/latest)
+[![Latest release v3.0.0](https://img.shields.io/badge/Latest%20release-v3.0.0-2563eb)](https://github.com/GeraltZeroZhong/TopoPPI/releases/tag/v3.0.0)
 
 ## Quick start<a id="quick-start"></a>
 
