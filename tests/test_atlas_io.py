@@ -46,6 +46,24 @@ def make_atlas(*, insertion_code=False, style="footprints"):
 
 
 class AtlasIOTests(unittest.TestCase):
+    def test_interrupted_overwrite_preserves_previous_editable_atlas(self):
+        patches, viz = make_atlas()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "saved.custom"
+            save_atlas(path, patches, viz, run_metadata={"saved": "original"})
+            original = path.read_bytes()
+
+            def fail_after_writing(stream, **arrays):
+                stream.write(b"incomplete archive")
+                raise OSError("disk full")
+
+            with mock.patch("numpy.savez_compressed", side_effect=fail_after_writing):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    save_atlas(path, patches, viz, run_metadata={"saved": "replacement"})
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(load_atlas(path).metadata["saved"], "original")
+            self.assertEqual(list(Path(tmp).iterdir()), [path])
+
     def test_roundtrip_preserves_all_corner_coordinates_provenance_and_author_ids(self):
         patches, viz = make_atlas(insertion_code=True)
         labels = mesh_vertex_residue_labels(patches[0], viz.source_residue_labels_A)

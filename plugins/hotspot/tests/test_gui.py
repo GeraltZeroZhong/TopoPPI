@@ -420,3 +420,107 @@ def test_default_model_runs_without_model_selection(workspace):
     assert panel.table.heading("score", "text") == "ddG (kcal/mol)"
     assert panel.table.get_children() == ("A:GLY:1",)
     assert panel.show_surface()
+
+
+@pytest.mark.parametrize("second_row", [
+    "A:TYR:2A,invalid,2,2",
+    "A:GLY:1,0.2,2,2",
+    ",0.2,2,2",
+], ids=["invalid-score", "duplicate-residue", "empty-residue"])
+def test_opening_invalid_ranking_keeps_displayed_ranking_and_selection(workspace, monkeypatch, second_row):
+    controller, panel, tmp_path = workspace
+    original = ranking_document(tmp_path)
+    panel.display(original)
+    panel.table.selection_set(panel.table.get_children()[1])
+    panel.selected()
+    before = [(key, panel.table.item(key, "values")) for key in panel.table.get_children()]
+    before_summary = panel.summary.get()
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "metadata.json").write_text(json.dumps(original.metadata))
+    (broken / "rankings.csv").write_text(
+        f"residue_key,rank_score,rank_min,rank_max\nA:GLY:1,0.4,1,1\n{second_row}\n")
+    callbacks = []
+    monkeypatch.setattr(controller.host.root, "report_callback_exception", lambda *error: callbacks.append(error))
+    monkeypatch.setattr("topoppi_hotspot.gui.filedialog.askopenfilename", lambda **_: str(broken / "metadata.json"))
+    panel.open_button.invoke()
+    controller.host.root.update()
+    assert not callbacks
+    assert "Details:" in panel.error.get()
+    assert panel.document is original and controller.document is original
+    assert [(key, panel.table.item(key, "values")) for key in panel.table.get_children()] == before
+    assert panel.table.selection() == ("A:TYR:2A",)
+    assert panel.summary.get() == before_summary
+
+
+def test_partner_change_error_recovery_and_reopen_use_real_saved_result(workspace, monkeypatch):
+    controller, panel, tmp_path = workspace
+    panel.vars["output_dir"].set(str(tmp_path / "partner-a"))
+
+    def wait():
+        deadline = time.monotonic() + 30
+        while panel._working and time.monotonic() < deadline:
+            controller.host.root.update()
+            time.sleep(.01)
+        assert not panel._working
+
+    panel.run_button.invoke()
+    wait()
+    original = panel.document
+    assert original is not None, panel.error.get()
+    assert original.metadata["selected_partner"] == ["A"]
+    original_bytes = (original.directory / "rankings.csv").read_bytes()
+    panel.partner.set("Partner 2")
+    panel.run_button.invoke()
+    wait()
+    assert "new results folder" in panel.error.get()
+    assert panel.document is original
+    assert (original.directory / "rankings.csv").read_bytes() == original_bytes
+
+    panel.vars["output_dir"].set(str(tmp_path / "partner-b"))
+    panel.run_button.invoke()
+    wait()
+    assert not panel.error.get()
+    assert panel.document.metadata["selected_partner"] == ["B"]
+    assert panel.table.get_children() == ("B:GLY:1",)
+    saved = panel.document.directory
+    panel.vars["chains_a"].set("next-chain")
+    monkeypatch.setattr("topoppi_hotspot.gui.filedialog.askopenfilename", lambda **_: str(original.directory / "metadata.json"))
+    panel.open_button.invoke()
+    controller.host.root.update()
+    assert panel.document.metadata["selected_partner"] == ["A"]
+    assert panel.table.get_children() == ("A:GLY:1",)
+    assert panel.vars["chains_a"].get() == "next-chain"
+    assert panel.binding_setup(displayed=True)["chains_a"] == "A"
+    assert (saved / "rankings.csv").exists()
+
+
+def test_cancel_new_ranking_keeps_previous_table_and_allows_retry(workspace):
+    controller, panel, tmp_path = workspace
+    original = ranking_document(tmp_path)
+    panel.display(original)
+    panel.table.selection_set(*panel.table.get_children())
+    panel.selected()
+    panel.vars["output_dir"].set(str(tmp_path / "cancelled-run"))
+    panel.run_button.invoke()
+    panel.cancel_button.invoke()
+    deadline = time.monotonic() + 30
+    while panel._working and time.monotonic() < deadline:
+        controller.host.root.update()
+        time.sleep(.01)
+    assert not panel._working
+    assert "cancelled" in panel.status.get()
+    assert panel.document is original
+    assert panel.table.selection() == ("A:GLY:1", "A:TYR:2A")
+    assert str(panel.run_button.cget("state")) == "normal"
+    assert str(panel.variants_button.cget("state")) == "normal"
+    panel.vars["output_dir"].set(str(tmp_path / "retry"))
+    panel.run_button.invoke()
+    deadline = time.monotonic() + 30
+    while panel._working and time.monotonic() < deadline:
+        controller.host.root.update()
+        time.sleep(.01)
+    assert not panel._working
+    assert not panel.error.get()
+    assert panel.document is not original
+    assert panel.document.metadata["model_id"] == "topoppi-hotspot-mutation-surface"

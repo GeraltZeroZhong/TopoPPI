@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 from Bio.PDB import MMCIFIO, PDBParser
-from topoppi_hotspot.inference import rank_complex, rank_interface
+from topoppi_hotspot.inference import _registry_embeddings, rank_complex, rank_interface
+from topoppi_hotspot.representations import all_residue_embeddings
 from topoppi_hotspot.sequence_embeddings import (
     prepare_chain_embedding_registry,
     prepare_interface_embedding_registry,
@@ -78,3 +79,36 @@ def test_pdb_and_mmcif_sequence_registries_use_core_residue_keys(tmp_path):
         prepare_chain_embedding_registry(table, tmp_path / name)
     for filename in ("sequences.csv", "chain_sequences.csv"):
         assert (tmp_path / "pdb" / filename).read_text() == (tmp_path / "cif" / filename).read_text()
+
+
+@pytest.mark.parametrize("chain_ids", [("A", "B"), ("1", "2")])
+def test_embedding_registry_preserves_numeric_identifiers(tmp_path, chain_ids):
+    source = tmp_path / "input.pdb"
+    mapping = dict(zip(("A", "B"), chain_ids, strict=True))
+    source.write_text("\n".join(
+        line[:21] + mapping[line[21]] + line[22:] if line.startswith("ATOM") else line
+        for line in FIXTURE.read_text().splitlines()) + "\n")
+    interface = topoppi.get_interface(topoppi.load_structure(source), *chain_ids)
+    registry = tmp_path / "registry"
+    prepare_interface_embedding_registry(interface, registry, complex_id="001")
+    chains = pd.read_csv(registry / "chain_sequences.csv", dtype=str, keep_default_na=False)
+    sequences = pd.read_csv(registry / "sequences.csv", dtype=str).set_index("sequence_id").sequence
+    (registry / "sequence_embeddings").mkdir()
+    vectors = {}
+    for index, (identifier, sequence) in enumerate(sequences.items()):
+        values = np.arange(len(sequence) * 2).reshape(-1, 2) + 100 * index
+        vectors[identifier] = values
+        np.savez(registry / "sequence_embeddings" / f"{identifier}.npz", sequence=sequence, embedding=values)
+    records, expected = [], []
+    for row in chains.itertuples(index=False):
+        for key, wt, value in zip(json.loads(row.residue_keys), sequences[row.sequence_id],
+                                  vectors[row.sequence_id], strict=True):
+            records.append({"complex_id": "001", "chain": row.chain, "residue_key": key,
+                            "wt": wt, "ca_resolved": True})
+            expected.append(value)
+    features = pd.DataFrame(records)
+    frame = features.iloc[::-1].reset_index(drop=True)
+    embeddings, report = _registry_embeddings(registry, frame, features)
+    assert report["registry_complex_id"] == "001"
+    np.testing.assert_array_equal(embeddings, np.asarray(expected)[::-1])
+    np.testing.assert_array_equal(all_residue_embeddings(registry, frame), embeddings)

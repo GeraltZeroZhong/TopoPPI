@@ -4,13 +4,19 @@ TopoPPI Hotspot ranks interface residues within a selected binding partner by pr
 
 ## Installation
 
-From the repository root, with the core installed:
+Install TopoPPI Hotspot from PyPI with Python 3.10.
+
+```sh
+python -m pip install topoppi-hotspot
+```
+
+For development, run this command from the repository root with Core installed.
 
 ```bash
 python -m pip install -e ./plugins/affinity -e ./plugins/hotspot
 ```
 
-Hotspot installs the Affinity package for shared mutation features and the Core `representation` extra for surface encoding. The bundled model also requires native OptCuts; follow the [platform installation instructions](../../README.md#optcuts-cannot-be-found). Published pip installations can use `topoppi-install-optcuts` on supported platforms. Set `TOPOPPI_OPTCUTS_BIN` to an existing executable, or pass `--optcuts-bin` to the ranking command. Once OptCuts and the Python dependencies are installed, prediction runs offline on CPU using the bundled weights.
+Hotspot installs the Affinity package for shared mutation features and the Core `representation` extra for surface encoding. The bundled model also requires native OptCuts; follow the [platform installation instructions](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/README.md#optcuts-cannot-be-found). Published pip installations can use `topoppi-install-optcuts` on supported platforms. Set `TOPOPPI_OPTCUTS_BIN` to an existing executable, or pass `--optcuts-bin` to the ranking command. Once OptCuts and the Python dependencies are installed, prediction runs offline on CPU using the bundled weights.
 
 The package uses NumPy, SciPy, pandas, Biopython, and scikit-learn through its dependencies. Optional extras enable PyTorch neural rankers (`neural`), XGBoost (`xgboost`), and ESMC embeddings (`sequence`). Embedding inference requires an explicit local checkpoint.
 
@@ -57,6 +63,8 @@ The Python and CLI interfaces also support explicit local ESMC checkpoints.
 
 ## Synthetic quick start
 
+From a source checkout, run the fitting example.
+
 ```bash
 python plugins/hotspot/examples/synthetic_ranking.py
 python -m topoppi_hotspot --help
@@ -87,7 +95,7 @@ The unified command is `topoppi hotspot rank-complex`. `--output` is an alias fo
 
 Choose a new output directory for each ranking. The CLI preserves existing ranking files; an empty directory can be reused after a failed calculation.
 
-`--partner` must match a complete input partner group. Comma-separated groups support multichain partners. The optional `--model-dir fitted_model` selects a custom model. Its directory contains `model.json` and the coefficient or estimator files described by that metadata. Supported kinds are `mutation_surface`, `linear`, `mlp`, `xgb`, `graph`, `block_linear`, and `fusion`. See the [official model card](topoppi_hotspot/data/mutation_surface/MODEL_CARD.md) for the bundled model's training source, feature definitions, units and applicability.
+`--partner` must match a complete input partner group. Comma-separated groups support multichain partners. The optional `--model-dir fitted_model` selects a custom model. Its directory contains `model.json` and the coefficient or estimator files described by that metadata. Supported kinds are `mutation_surface`, `linear`, `mlp`, `xgb`, `graph`, `block_linear`, and `fusion`. See the [official model card](https://github.com/GeraltZeroZhong/TopoPPI/blob/HEAD/plugins/hotspot/topoppi_hotspot/data/mutation_surface/MODEL_CARD.md) for the bundled model's training source, feature definitions, units and applicability.
 
 Models that use sequence features additionally require `--embedding-registry` or `--esmc-checkpoint`. Fresh embedding inference defaults to CPU; `--device cuda` explicitly selects CUDA. The ESMC implementation uses the 600M architecture and limits observed chains to 1,000 residues.
 
@@ -174,7 +182,7 @@ Run the independent synthetic checks from the repository root:
 PYTHONPATH=src:plugins/affinity:plugins/hotspot python -m pytest plugins/hotspot/tests -q
 ```
 
-Tests construct small numerical arrays and use the bundled synthetic two-chain PDB fixture. They check graph alignment, conservation, invariance, train-only scaling, serialization, normalization, and inference dispatch. Optional neural tests skip when PyTorch is unavailable. Contributions should preserve feature names, units, seeds, portable model formats, and meaningful synthetic assertions.
+Tests construct small numerical arrays and use the bundled synthetic two-chain PDB fixture. They check graph alignment, conservation, invariance, scaling fitted on training data, serialization, normalization, and inference dispatch. Optional neural tests skip when PyTorch is unavailable. Contributions should preserve feature names, units, seeds, portable model formats, and meaningful synthetic assertions.
 
 Import normalization from `representations`, partner-relative features from `partner_features`, graph mapping from `graph_operators`, and SASA from `solvent_accessibility`. Existing portable model kinds, metadata keys, feature names, and `rank-complex` arguments remain supported.
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.0.0] - 2026-11-09
+## [3.0.0] - 2026-11-18
 
 - Standardized the Windows numerical runtime on OpenBLAS, retained native command errors in installation logs, and made interrupted micromamba downloads recoverable on retry.
 - Closed ProLIF structure readers before temporary-file cleanup on Windows.

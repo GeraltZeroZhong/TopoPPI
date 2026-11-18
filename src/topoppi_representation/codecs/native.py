@@ -42,6 +42,7 @@ def coarse_patch(patch, n_residues, fraction=1.0):
 
 
 def encode_native(source, fraction=1.0, quantization_bits=18, *, geometry_cache=None):
+    """Encode a source; cached geometry is reused while that source stays unchanged."""
     import DracoPy
 
     xyzs, edges, masses, sides, patch_ids, parts, payloads = [], [], [], [], [], [], {}
@@ -49,9 +50,10 @@ def encode_native(source, fraction=1.0, quantization_bits=18, *, geometry_cache=
     for k, p in enumerate(source.patches):
         key = ("N", float(fraction), k)
         if geometry_cache is not None:
-            if key not in geometry_cache:
-                geometry_cache[key] = coarse_patch(p, len(source.residue_keys), fraction)
-            xyz, faces, mass = geometry_cache[key]
+            cached = geometry_cache.get(key)
+            if cached is None or cached[0] is not source:
+                geometry_cache[key] = (source, coarse_patch(p, len(source.residue_keys), fraction))
+            xyz, faces, mass = geometry_cache[key][1]
         else:
             xyz, faces, mass = coarse_patch(p, len(source.residue_keys), fraction)
         n = len(xyz)

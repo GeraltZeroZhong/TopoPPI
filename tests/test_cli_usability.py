@@ -8,6 +8,24 @@ import pytest
 from topoppi import cli
 
 
+def test_mapping_interrupt_returns_cancellation_status(tmp_path, capsys):
+    output = tmp_path / "map.png"
+    with patch("topoppi.cli.run_interface_mapping", side_effect=KeyboardInterrupt):
+        code = cli.main(["complex.pdb", "-o", str(output)])
+    assert code == 130
+    assert "Mapping cancelled." in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_geometry_interrupt_returns_cancellation_status(tmp_path, capsys):
+    output = tmp_path / "interface.npz"
+    with patch("topoppi.cli._core_analysis", side_effect=KeyboardInterrupt):
+        code = cli.main(["geometry", "complex.pdb", "-o", str(output)])
+    assert code == 130
+    assert "Operation cancelled." in capsys.readouterr().err
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("command", ["interface", "geometry"])
 def test_core_export_refuses_to_replace_the_input_structure(command, tmp_path, capsys):
     source = tmp_path / "complex.pdb"

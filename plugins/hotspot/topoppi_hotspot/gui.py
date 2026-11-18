@@ -270,27 +270,34 @@ class HotspotPanel:
         self._poll_id = self.window.after(80, self._poll)
 
     def display(self, document, selected=()):
-        self.document = document
-        self.controller.document = document
-        self.table.delete(*self.table.get_children())
         labels = {"missing_native_footprint": "Native footprint unavailable", "missing_CA": "CA unavailable",
                   "missing_spatial_context": "Spatial context imputed", "tied_score": "Tied score"}
         is_ddg = document.metadata.get("target") == "ddg"
-        self.table.heading("score", text="ddG (kcal/mol)" if is_ddg else "Score")
+        table_rows, residue_keys = [], set()
         for row in document.rows:
+            key = row["residue_key"]
+            if not key or key in residue_keys:
+                raise ValueError("Each ranking row needs its own residue identifier. Restore a complete rankings.csv.")
+            residue_keys.add(key)
             low, high = int(row["rank_min"]), int(row["rank_max"])
             rank = str(low) if low == high else f"{low}-{high}"
             percentile = f"{float(row.get('full_candidate_percentile', 0)):.1%}"
             flags = "; ".join(labels.get(flag, flag) for flag in str(row.get("flags", "")).split(";") if flag) or "Complete"
-            self.table.insert("", tk.END, iid=row["residue_key"], values=(rank, row["residue_key"], f"{float(row['rank_score']):.5g}", percentile, flags))
-        if document.rows:
-            selected_keys = [key for key in selected if self.table.exists(key)]
-            self.table.selection_set(selected_keys or [document.rows[0]["residue_key"]])
+            table_rows.append((key, (rank, key, f"{float(row['rank_score']):.5g}", percentile, flags)))
         partner = ",".join(document.metadata.get("selected_partner", []))
         source = Path(document.metadata.get("structure", "Saved structure")).name
         temperature = float(document.metadata.get("temperature_K", 298.15))
         meaning = (f"Predicted Ala ddG (kcal/mol) at {temperature:g} K. Larger positive values indicate greater loss of binding."
                    if is_ddg else "Standard non-alanine interface residues. Higher scores and within-partner percentiles rank first.")
+        self.document = document
+        self.controller.document = document
+        self.table.delete(*self.table.get_children())
+        self.table.heading("score", text="ddG (kcal/mol)" if is_ddg else "Score")
+        for key, values in table_rows:
+            self.table.insert("", tk.END, iid=key, values=values)
+        if document.rows:
+            selected_keys = [key for key in selected if self.table.exists(key)]
+            self.table.selection_set(selected_keys or [document.rows[0]["residue_key"]])
         self.summary.set(f"{source} · partner {partner} · {len(document.rows)} ranked residues.\n{meaning}")
         self.status.set(f"Ranking ready · {document.directory}")
         self.error.set("")

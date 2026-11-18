@@ -13,6 +13,7 @@ from scipy.spatial import cKDTree
 
 from topoppi.atlas.uv import as_corner_uv
 from topoppi.config import VisualizationConfig
+from topoppi.file_utils import write_npz_atomic
 from topoppi.io.atom_records import atom_records as _atom_records
 from topoppi.io.atom_records import restore_atoms as _restore_atoms
 from topoppi.visualization.visualizer import InterfaceVisualizer
@@ -103,8 +104,7 @@ def save_atlas(path, patches, visualizer, *, style_config=None, run_metadata=Non
     arrays["document_json"] = np.asarray(json.dumps(document, allow_nan=False))
     target = Path(path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("wb") as stream:
-        np.savez_compressed(stream, **arrays)
+    write_npz_atomic(target, arrays)
     return target
 
 

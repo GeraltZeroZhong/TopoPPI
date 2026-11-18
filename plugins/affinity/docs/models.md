@@ -14,8 +14,8 @@ kernel. Its physicochemical inputs comprise 263 descriptors of the native
 interface and substitutions and 167 atomic
 solvent-accessible surface area (SASA) descriptors, plus temperature divided by
 298.15 K. Both use median imputation, missingness indicators and standardization.
-Model parameters were selected by group-macro mean absolute error across
-inner-validation splits.
+Model parameters were selected by mean absolute error averaged equally across
+groups and then across inner-validation splits.
 Final fits use all eligible training samples with inverse similarity-group
 weights. The affinity model stores regression coefficients and an intercept;
 the mutation model stores standardized training vectors and dual coefficients.

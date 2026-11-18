@@ -1,9 +1,23 @@
 cff-version: 1.2.0
-message: "If you use TopoPPI in your research, please cite this software."
-title: "TopoPPI: a geometry-aware platform for visualization and low-distortion mapping of protein–protein interaction interfaces"
+message: "If you use TopoPPI in your research, please cite the article below."
+title: "TopoPPI"
 version: "3.0.0"
-date-released: "2026-11-09"
+date-released: "2026-11-18"
 repository-code: "https://github.com/GeraltZeroZhong/TopoPPI"
 license: "MIT"
 authors:
-  - name: "Shuyu Zhong"
+  - family-names: "Zhong"
+    given-names: "Shuyu"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Zhong"
+      given-names: "Shuyu"
+  title: "TopoPPI: A geometry-aware platform for visualization and low-distortion mapping of protein-protein interaction interfaces"
+  journal: "PLOS Computational Biology"
+  year: 2026
+  date-published: "2026-11-17"
+  volume: 22
+  issue: 11
+  start: "e1014963"
+  doi: "10.1371/journal.pcbi.1014963"

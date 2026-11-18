@@ -98,6 +98,21 @@ def test_saved_prediction_table_must_contain_result_columns_and_rows(tmp_path, m
         workflow.load_analysis(output)
 
 
+@pytest.mark.parametrize('payload', [[], None, {'format': 'another-analysis'}])
+def test_inspect_wrong_json_explains_the_expected_results_file(tmp_path, capsys, payload):
+    source = tmp_path / 'unrelated.json'
+    original = json.dumps(payload)
+    source.write_text(original)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(['inspect', str(source), '--json'])
+    assert stopped.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert 'Choose analysis.json from a TopoPPI Affinity results folder' in captured.err
+    assert 'Traceback' not in captured.err
+    assert source.read_text() == original
+
+
 def test_cancelled_result_can_reopen_a_header_only_prediction_table(tmp_path, model):
     output = tmp_path / 'analysis'
     report = workflow.analyze(FIXTURE, 'A', 'B', model, output, mutations=['GA1W'])

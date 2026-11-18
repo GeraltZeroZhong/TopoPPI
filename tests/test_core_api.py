@@ -110,6 +110,23 @@ def test_default_native_record_keeps_existing_version_and_metadata(tmp_path):
     assert restored.contacts() == geometry.contacts()
 
 
+def test_failed_native_overwrite_preserves_saved_geometry(tmp_path, monkeypatch):
+    geometry = compute_geometry(get_interface(load_structure(FIXTURE), "A", "B"), sides=(0,))
+    destination = save_interface(geometry, tmp_path / "native.custom")
+    original = destination.read_bytes()
+
+    def fail_after_writing(stream, **arrays):
+        stream.write(b"incomplete archive")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(np, "savez_compressed", fail_after_writing)
+    with pytest.raises(OSError, match="disk full"):
+        save_interface(geometry, destination)
+    assert destination.read_bytes() == original
+    assert load_interface(destination).contacts() == geometry.contacts()
+    assert list(tmp_path.iterdir()) == [destination]
+
+
 def test_partner_selection_retains_complete_groups_and_rejects_overlap(tmp_path):
     lines = FIXTURE.read_text().splitlines()
     extra = [line[:21] + "C" + line[22:26] + "A" + line[27:]

@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,3 +41,29 @@ def test_example_cli_prints_exported_structure(tmp_path, monkeypatch, capsys):
     path = Path(capsys.readouterr().out.strip())
     assert path == output / "synthetic_complex.pdb"
     assert path.is_file()
+
+
+@pytest.mark.parametrize("destination_is_file", [False, True])
+def test_example_cli_preserves_existing_data_with_readable_error(tmp_path, destination_is_file):
+    output = tmp_path / "my example"
+    if destination_is_file:
+        output.write_text("user data\n")
+        preserved = output
+    else:
+        preserved = copy_example(output, synthetic=True)
+        preserved.write_bytes(preserved.read_bytes() + b"REMARK user annotation\n")
+    original = preserved.read_bytes()
+
+    result = subprocess.run(
+        [sys.executable, "-m", "topoppi.examples", str(output), "--synthetic"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "topoppi.examples:" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert preserved.read_bytes() == original
+    if not destination_is_file:
+        assert "Choose another output folder" in result.stderr

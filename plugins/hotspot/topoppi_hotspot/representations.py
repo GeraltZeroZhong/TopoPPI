@@ -11,7 +11,7 @@ import pandas as pd
 def all_residue_embeddings(scan_dir, frame):
     """Map Hotspot-owned WT embeddings, including native Ala context nodes."""
     root = Path(scan_dir)
-    chains = pd.read_csv(root / 'chain_sequences.csv', keep_default_na=False)
+    chains = pd.read_csv(root / 'chain_sequences.csv', keep_default_na=False, dtype=str)
     lookup = {}
     for row in chains.itertuples(index=False):
         with np.load(root / 'sequence_embeddings' / f'{row.sequence_id}.npz', allow_pickle=False) as data:
